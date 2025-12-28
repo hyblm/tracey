@@ -1,0 +1,260 @@
+//! tracey - Measure spec coverage in Rust codebases
+//!
+//! tracey parses Rust source files to find references to specification rules
+//! (in the format `[rule.id]` in comments) and compares them against a spec
+//! manifest to produce coverage reports.
+
+mod config;
+mod coverage;
+mod lexer;
+mod scanner;
+mod spec;
+
+use color_eyre::eyre::{Result, WrapErr};
+use config::Config;
+use coverage::CoverageReport;
+use facet_args as args;
+use owo_colors::OwoColorize;
+use spec::SpecManifest;
+use std::path::PathBuf;
+
+/// CLI arguments
+#[derive(Debug, facet::Facet)]
+struct Args {
+    /// Path to config file (default: .config/tracey/config.kdl)
+    #[facet(args::named, args::short = 'c', default)]
+    config: Option<PathBuf>,
+
+    /// Only check, don't print detailed report (exit 1 if failing)
+    #[facet(args::named, default)]
+    check: bool,
+
+    /// Minimum coverage percentage to pass (default: 0)
+    #[facet(args::named, default)]
+    threshold: Option<f64>,
+
+    /// Show verbose output including all references
+    #[facet(args::named, args::short = 'v', default)]
+    verbose: bool,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    color_eyre::install()?;
+
+    let args: Args = facet_args::from_std_args()
+        .wrap_err("Failed to parse command line arguments")?;
+
+    // Find project root (look for Cargo.toml)
+    let project_root = find_project_root()?;
+    
+    // Load config
+    let config_path = args.config.unwrap_or_else(|| {
+        project_root.join(".config/tracey/config.kdl")
+    });
+    
+    let config = load_config(&config_path)?;
+    
+    let threshold = args.threshold.unwrap_or(0.0);
+    let mut all_passing = true;
+
+    for spec_config in &config.specs {
+        eprintln!(
+            "{} Fetching spec manifest for {}...",
+            "->".blue().bold(),
+            spec_config.name.cyan()
+        );
+
+        // Fetch the spec manifest
+        let manifest = SpecManifest::fetch(&spec_config.rules_url).await?;
+        
+        eprintln!(
+            "   Found {} rules in spec",
+            manifest.rules.len().to_string().green()
+        );
+
+        // Scan source files
+        eprintln!(
+            "{} Scanning Rust files...",
+            "->".blue().bold()
+        );
+
+        let include = if spec_config.include.is_empty() {
+            vec!["**/*.rs".to_string()]
+        } else {
+            spec_config.include.clone()
+        };
+        
+        let exclude = if spec_config.exclude.is_empty() {
+            vec!["target/**".to_string()]
+        } else {
+            spec_config.exclude.clone()
+        };
+
+        let references = scanner::scan_directory(&project_root, &include, &exclude)?;
+        
+        eprintln!(
+            "   Found {} rule references",
+            references.len().to_string().green()
+        );
+
+        // Compute coverage
+        let report = CoverageReport::compute(
+            spec_config.name.clone(),
+            &manifest,
+            references,
+        );
+
+        // Print report
+        print_report(&report, args.verbose);
+
+        if !report.is_passing(threshold) {
+            all_passing = false;
+        }
+    }
+
+    if args.check && !all_passing {
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+fn find_project_root() -> Result<PathBuf> {
+    let mut current = std::env::current_dir()?;
+    
+    loop {
+        if current.join("Cargo.toml").exists() {
+            return Ok(current);
+        }
+        
+        if !current.pop() {
+            // No Cargo.toml found, use current directory
+            return std::env::current_dir()
+                .wrap_err("Failed to get current directory");
+        }
+    }
+}
+
+fn load_config(path: &PathBuf) -> Result<Config> {
+    if !path.exists() {
+        eyre::bail!(
+            "Config file not found at {}\n\n\
+             Create a config file with your spec configuration:\n\n\
+             specs {{\n    \
+                 spec {{\n        \
+                     name \"my-spec\"\n        \
+                     rules_url \"https://example.com/_rules.json\"\n    \
+                 }}\n\
+             }}",
+            path.display()
+        );
+    }
+
+    let content = std::fs::read_to_string(path)
+        .wrap_err_with(|| format!("Failed to read config file: {}", path.display()))?;
+
+    let config: Config = facet_kdl::from_str(&content)
+        .wrap_err_with(|| format!("Failed to parse config file: {}", path.display()))?;
+
+    Ok(config)
+}
+
+fn print_report(report: &CoverageReport, verbose: bool) {
+    println!();
+    println!(
+        "{} {} Coverage Report",
+        "##".bold(),
+        report.spec_name.cyan().bold()
+    );
+    println!();
+
+    // Coverage summary
+    let percent = report.coverage_percent();
+    let percent_str = format!("{:.1}%", percent);
+    let color_percent = if percent >= 80.0 {
+        percent_str.green().to_string()
+    } else if percent >= 50.0 {
+        percent_str.yellow().to_string()
+    } else {
+        percent_str.red().to_string()
+    };
+
+    println!(
+        "Coverage: {} ({}/{} rules)",
+        color_percent,
+        report.covered_rules.len(),
+        report.total_rules
+    );
+    println!();
+
+    // Invalid references (errors)
+    if !report.invalid_references.is_empty() {
+        println!(
+            "{} Invalid References ({}):",
+            "!".red().bold(),
+            report.invalid_references.len()
+        );
+        for r in &report.invalid_references {
+            println!(
+                "  {} {}:{} - unknown rule [{}]",
+                "-".red(),
+                r.file,
+                r.line,
+                r.rule_id.yellow()
+            );
+        }
+        println!();
+    }
+
+    // Uncovered rules
+    if !report.uncovered_rules.is_empty() {
+        println!(
+            "{} Uncovered Rules ({}):",
+            "?".yellow().bold(),
+            report.uncovered_rules.len()
+        );
+        
+        let mut uncovered: Vec<_> = report.uncovered_rules.iter().collect();
+        uncovered.sort();
+        
+        for rule_id in uncovered {
+            println!(
+                "  {} [{}]",
+                "-".yellow(),
+                rule_id.dimmed()
+            );
+        }
+        println!();
+    }
+
+    // Verbose: show all references
+    if verbose && !report.references_by_rule.is_empty() {
+        println!(
+            "{} Covered Rules ({}):",
+            "+".green().bold(),
+            report.covered_rules.len()
+        );
+        
+        let mut rules: Vec<_> = report.references_by_rule.keys().collect();
+        rules.sort();
+        
+        for rule_id in rules {
+            let refs = &report.references_by_rule[rule_id];
+            println!(
+                "  {} [{}] ({} references)",
+                "+".green(),
+                rule_id.green(),
+                refs.len()
+            );
+            for r in refs {
+                println!(
+                    "      {}:{}",
+                    r.file.dimmed(),
+                    r.line.to_string().dimmed()
+                );
+            }
+        }
+        println!();
+    }
+}
