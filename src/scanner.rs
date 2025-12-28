@@ -1,6 +1,6 @@
 //! File system scanner for Rust files
 
-use crate::lexer::{extract_rule_references, RuleReference};
+use crate::lexer::{RuleReference, extract_rule_references};
 use eyre::Result;
 use std::path::Path;
 use walkdir::WalkDir;
