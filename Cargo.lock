@@ -1189,7 +1189,7 @@ dependencies = [
 
 [[package]]
 name = "tracey"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "eyre",
  "facet",
@@ -1206,7 +1206,7 @@ dependencies = [
 
 [[package]]
 name = "tracey-core"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "eyre",
  "facet",
