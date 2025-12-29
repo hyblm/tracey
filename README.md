@@ -1,5 +1,7 @@
 # tracey
 
+> **Note:** Looking for Tracy, the frame profiler? That's a different project: [wolfpld/tracy](https://github.com/wolfpld/tracy)
+
 A CLI tool and library to measure spec coverage in Rust codebases.
 
 ## What it does
