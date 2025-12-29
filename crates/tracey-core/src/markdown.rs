@@ -320,7 +320,7 @@ impl RulesManifest {
     ///
     /// [impl manifest.format.json]
     pub fn to_json(&self) -> String {
-        facet_json::to_string_pretty(self)
+        facet_format_json::to_string_pretty(self).expect("RulesManifest should serialize to JSON")
     }
 }
 
@@ -384,6 +384,8 @@ impl MarkdownProcessor {
             // Check if this line is a rule identifier: r[rule.id] or r[rule.id attrs...]
             // [impl markdown.syntax.marker]
             // [impl markdown.syntax.standalone]
+            // [impl markdown.syntax.inline-ignored]
+            // By requiring the trimmed line to START with "r[", inline occurrences are ignored
             if trimmed.starts_with("r[") && trimmed.ends_with(']') && trimmed.len() > 3 {
                 let inner = &trimmed[2..trimmed.len() - 1];
 
