@@ -589,6 +589,10 @@ pub struct FullReqRef {
 }
 
 /// Extract ALL requirement references from a file using tree-sitter
+///
+/// r[impl ref.parser.tree-sitter]
+/// r[impl ref.parser.languages]
+/// r[impl ref.parser.unified]
 pub fn extract_refs(path: &Path, source: &str) -> Vec<FullReqRef> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 

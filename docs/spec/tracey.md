@@ -228,6 +228,27 @@ Requirement references MUST be recognized in block comments (`/* */`, `""" """`,
 r[ref.comments.doc]
 Requirement references MUST be recognized in documentation comments (`///`, `//!`, `/** */`, etc. depending on language).
 
+### Source Code Parsing
+
+r[ref.parser.tree-sitter]
+Tracey MUST use tree-sitter for parsing source code to extract comments. This ensures proper handling of nested comments, string literals that look like comments, and language-specific comment syntax.
+
+> r[ref.parser.languages]
+> Tracey MUST support extracting requirement references from comments in the following languages:
+>
+> | Language   | Extensions              | Comment syntax                    |
+> |------------|-------------------------|-----------------------------------|
+> | Rust       | `.rs`                   | `//`, `/* */`, `///`, `//!`       |
+> | Swift      | `.swift`                | `//`, `/* */`                     |
+> | Go         | `.go`                   | `//`, `/* */`                     |
+> | Java       | `.java`                 | `//`, `/* */`, `/** */`           |
+> | Python     | `.py`                   | `#`, `""" """`                    |
+> | TypeScript | `.ts`, `.tsx`, `.mts`   | `//`, `/* */`                     |
+> | JavaScript | `.js`, `.jsx`, `.cjs`   | `//`, `/* */`                     |
+
+> r[ref.parser.unified]
+> The same tree-sitter based extraction MUST be used for both forward traceability (finding which requirements are implemented) and reverse traceability (finding which code units have requirement annotations).
+
 ### Source Location Tracking
 
 r[ref.span.offset]
