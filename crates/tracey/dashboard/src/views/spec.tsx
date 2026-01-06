@@ -276,6 +276,22 @@ export function SpecView({
   // Build hierarchical tree from flat outline
   const outlineTree = useMemo(() => buildOutlineTree(outline), [outline]);
 
+  // r[impl dashboard.spec.outline-totals]
+  // Compute overall coverage totals from root-level entries
+  const overallCoverage = useMemo(() => {
+    let total = 0;
+    let implCount = 0;
+    let verifyCount = 0;
+    for (const node of outlineTree) {
+      total += node.entry.aggregated.total;
+      implCount += node.entry.aggregated.implCount;
+      verifyCount += node.entry.aggregated.verifyCount;
+    }
+    const implPct = total > 0 ? Math.round((implCount / total) * 100) : 0;
+    const verifyPct = total > 0 ? Math.round((verifyCount / total) * 100) : 0;
+    return { total, implCount, verifyCount, implPct, verifyPct };
+  }, [outlineTree]);
+
   // Concatenate all sections' HTML (sections are pre-sorted by weight on server)
   const processedContent = useMemo(() => {
     if (!spec?.sections) return "";
@@ -738,8 +754,8 @@ export function SpecView({
         <div class="sidebar-header">
           <span>Outline</span>
           <span class="outline-legend">
-            <span class="legend-item"><span class="legend-dot legend-dot--impl"></span>Impl</span>
-            <span class="legend-item"><span class="legend-dot legend-dot--test"></span>Test</span>
+            <span class="legend-item"><span class="legend-dot legend-dot--impl"></span>${overallCoverage.implPct}%</span>
+            <span class="legend-item"><span class="legend-dot legend-dot--test"></span>${overallCoverage.verifyPct}%</span>
           </span>
         </div>
         <div class="sidebar-content">

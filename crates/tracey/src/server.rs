@@ -232,6 +232,7 @@ impl<'a> QueryEngine<'a> {
 
     /// Get uncovered rules (no impl refs) for a spec/impl
     // r[impl mcp.discovery.pagination] - Section filtering provides pagination
+    // r[impl validation.orphaned]
     pub fn uncovered(
         &self,
         spec: &str,

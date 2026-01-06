@@ -654,6 +654,7 @@ fn extract_refs_recursive(source: &str, node: Node, refs: &mut Vec<FullReqRef>) 
     }
 }
 
+// r[impl ref.syntax.surrounding-text]
 fn extract_full_refs_from_text(
     text: &str,
     line: usize,
@@ -702,6 +703,7 @@ fn extract_full_refs_from_text(
     }
 }
 
+// r[impl ref.syntax.req-id]
 fn try_parse_full_ref(
     chars: &mut std::iter::Peekable<impl Iterator<Item = (usize, char)>>,
 ) -> Option<(String, String, usize)> {

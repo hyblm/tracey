@@ -214,6 +214,7 @@ pub(crate) async fn load_rules_from_globs(
     for pattern in patterns {
         let rules = load_rules_from_glob(root, pattern, quiet).await?;
 
+        // r[impl validation.duplicates]
         // Check for duplicates across patterns
         for (rule, source) in rules {
             if seen_ids.contains(&rule.id) {

@@ -555,6 +555,9 @@ The specification view MUST display a collapsible outline tree of headings in a 
 r[dashboard.spec.outline-coverage]
 Each outline heading SHOULD display a coverage indicator showing the ratio of covered requirements within that section.
 
+r[dashboard.spec.outline-totals]
+The outline header MUST display overall coverage percentages for both implementation and verification (e.g., "72% Impl 2% Test").
+
 r[dashboard.spec.content]
 The specification view MUST display the rendered markdown content with requirement containers.
 

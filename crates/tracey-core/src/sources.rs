@@ -260,6 +260,7 @@ impl Sources for WalkSources {
             let resolved_path = self.root.join(&base_path);
 
             // r[impl ref.cross-workspace.missing-paths]
+            // r[impl ref.cross-workspace.graceful-degradation]
             // Check if the path exists
             if !resolved_path.exists() {
                 let warning = format!(
@@ -541,6 +542,75 @@ mod tests {
         fn test_matches_glob_exact() {
             assert!(matches_glob("foo.rs", "foo.rs"));
             assert!(!matches_glob("bar.rs", "foo.rs"));
+        }
+
+        #[test]
+        fn test_matches_glob_dashboard_tsx() {
+            // Test the specific dashboard pattern that wasn't working
+            assert!(matches_glob(
+                "crates/tracey/dashboard/src/main.tsx",
+                "crates/tracey/dashboard/src/**/*.tsx"
+            ));
+            assert!(matches_glob(
+                "crates/tracey/dashboard/src/router.ts",
+                "crates/tracey/dashboard/src/**/*.ts"
+            ));
+            assert!(matches_glob(
+                "crates/tracey/dashboard/src/views/spec.tsx",
+                "crates/tracey/dashboard/src/**/*.tsx"
+            ));
+        }
+
+        #[test]
+        fn test_walk_typescript_files() {
+            // This test verifies that WalkSources actually finds TypeScript files
+            // in the dashboard directory when configured with the right patterns
+            use super::super::*;
+            use std::path::PathBuf;
+
+            // Get the project root (tracey-core's parent's parent)
+            let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let project_root = manifest_dir.parent().unwrap().parent().unwrap();
+
+            // Check if the dashboard directory exists
+            let dashboard_src = project_root.join("crates/tracey/dashboard/src");
+            if !dashboard_src.exists() {
+                // Skip test if dashboard doesn't exist
+                return;
+            }
+
+            // Create WalkSources with the same patterns as config.kdl
+            let result = Reqs::extract(
+                WalkSources::new(project_root)
+                    .include([
+                        "crates/**/*.rs".to_string(),
+                        "crates/tracey/dashboard/src/**/*.ts".to_string(),
+                        "crates/tracey/dashboard/src/**/*.tsx".to_string(),
+                    ])
+                    .exclude(["target/**".to_string()]),
+            )
+            .unwrap();
+
+            // We should find at least one TypeScript reference
+            let ts_refs: Vec<_> = result
+                .reqs
+                .references
+                .iter()
+                .filter(|r| r.file.to_string_lossy().contains("dashboard/src"))
+                .collect();
+
+            // Print what we found for debugging
+            eprintln!("Found {} total references", result.reqs.references.len());
+            eprintln!("Found {} TypeScript references:", ts_refs.len());
+            for r in &ts_refs {
+                eprintln!("  - {} in {:?}", r.req_id, r.file);
+            }
+
+            // We added annotations to main.tsx and router.ts, so we should find them
+            assert!(
+                !ts_refs.is_empty(),
+                "Expected to find TypeScript references in dashboard/src, but found none"
+            );
         }
     }
 }

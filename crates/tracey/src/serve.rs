@@ -40,6 +40,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 use tower_http::cors::{Any, CorsLayer};
 use tracey_core::code_units::CodeUnit;
+use tracey_core::is_supported_extension;
 use tracey_core::{RefVerb, ReqDefinition, Reqs};
 use tracing::{debug, error, info, warn};
 
@@ -686,8 +687,9 @@ pub async fn build_dashboard_data(
                 include.iter().partition(|p| !p.starts_with("../"));
 
             // Helper to process a file
+            // r[impl walk.extensions]
             let mut process_file = |path: &Path, root: &Path, patterns: &[&String]| {
-                if path.extension().is_some_and(|e| e == "rs") {
+                if path.extension().is_some_and(is_supported_extension) {
                     let relative = path.strip_prefix(root).unwrap_or(path);
                     let relative_str = relative.to_string_lossy();
 

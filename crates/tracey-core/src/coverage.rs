@@ -35,6 +35,7 @@ impl CoverageReport {
     /// r[impl coverage.compute.covered]
     /// r[impl coverage.compute.uncovered]
     /// r[impl coverage.compute.invalid]
+    /// r[impl validation.broken-refs]
     pub fn compute(
         spec_name: impl Into<String>,
         known_rule_ids: &HashSet<String>,

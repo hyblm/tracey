@@ -366,7 +366,7 @@ impl TraceyHandler {
         out
     }
 
-    // r[impl mcp.tool.rule]
+    // r[impl mcp.tool.req]
     fn handle_rule(&self, rule_id: &str) -> String {
         let mut out = self.format_header();
 
