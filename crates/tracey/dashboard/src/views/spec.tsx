@@ -55,15 +55,13 @@ function ImplementationPreviewModal({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
-  const filename = fileData.path.split("/").pop() || fileData.path;
-
   console.log("Preview modal config.projectRoot:", config.projectRoot);
 
   return html`
     <div class="modal-overlay" onClick=${onClose}>
       <div class="modal-content impl-preview-modal" onClick=${(e: Event) => e.stopPropagation()}>
         <div class="modal-header">
-          <h3>${filename}:${line}</h3>
+          <h3>${fileData.path}:${line}</h3>
           <button class="modal-close" onClick=${onClose} title="Close (Esc)">×</button>
         </div>
         <div class="modal-body">
@@ -77,7 +75,7 @@ function ImplementationPreviewModal({
           />
         </div>
         <div class="modal-footer">
-          <button class="modal-btn modal-btn-secondary" onClick=${onClose}>Close</button>
+          <button class="modal-btn modal-btn-cancel" onClick=${onClose}>Close</button>
           <button class="modal-btn modal-btn-primary" onClick=${onOpenInSources}>
             Open in Sources →
           </button>

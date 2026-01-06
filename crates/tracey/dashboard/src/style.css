@@ -1139,11 +1139,12 @@ a.rule-marker:hover {
     border: 1px solid color-mix(in srgb, var(--fg-dim) 20%, transparent);
     cursor: pointer;
     font-family: inherit;
-    padding: 0.2rem 0.6rem;
+    padding: 0.15rem 0.6rem;
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;
     transition: all 0.15s;
+    line-height: 1;
 }
 
 .req-badge.req-edit:hover {
@@ -2212,6 +2213,17 @@ a.rule-marker:hover {
 
 .modal-btn-save:hover:not(:disabled) {
     filter: brightness(1.1);
+}
+
+.modal-btn-primary {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+    font-weight: 500;
+}
+
+.modal-btn-primary:hover:not(:disabled) {
+    filter: brightness(0.95);
 }
 
 /* Inline Editor */

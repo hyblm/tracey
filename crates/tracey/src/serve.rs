@@ -430,6 +430,32 @@ fn get_git_status(project_root: &Path) -> HashMap<String, GitStatus> {
 // Data Building
 // ============================================================================
 
+/// Compute relative path from `from` to `to`, preserving ../ for cross-workspace paths
+fn compute_relative_path(from: &Path, to: &Path) -> String {
+    let from_components: Vec<_> = from.components().collect();
+    let to_components: Vec<_> = to.components().collect();
+
+    let mut common_len = 0;
+    for (a, b) in from_components.iter().zip(to_components.iter()) {
+        if a == b {
+            common_len += 1;
+        } else {
+            break;
+        }
+    }
+
+    // Build relative path: ../ for each component in from after common, then to components
+    let mut result = PathBuf::new();
+    for _ in common_len..from_components.len() {
+        result.push("..");
+    }
+    for component in &to_components[common_len..] {
+        result.push(component);
+    }
+
+    result.display().to_string()
+}
+
 pub async fn build_dashboard_data(
     project_root: &Path,
     config: &Config,
@@ -559,9 +585,21 @@ pub async fn build_dashboard_data(
 
                 for r in &reqs.references {
                     if r.req_id == rule_def.id {
-                        let relative = r.file.strip_prefix(project_root).unwrap_or(&r.file);
+                        // Canonicalize the reference file path for consistent matching
+                        let canonical_ref =
+                            r.file.canonicalize().unwrap_or_else(|_| r.file.clone());
+
+                        // Compute relative path, preserving ../ for cross-workspace files
+                        let relative_display =
+                            if let Ok(rel) = canonical_ref.strip_prefix(&abs_root) {
+                                rel.display().to_string()
+                            } else {
+                                // Cross-workspace file: compute relative path from abs_root
+                                compute_relative_path(&abs_root, &canonical_ref)
+                            };
+
                         let code_ref = ApiCodeRef {
-                            file: relative.display().to_string(),
+                            file: relative_display,
                             line: r.line,
                         };
                         match r.verb {
@@ -643,20 +681,18 @@ pub async fn build_dashboard_data(
 
             // Extract code units for reverse traceability
             let mut impl_code_units: BTreeMap<PathBuf, Vec<CodeUnit>> = BTreeMap::new();
-            let walker = ignore::WalkBuilder::new(project_root)
-                .follow_links(true)
-                .hidden(false)
-                .git_ignore(true)
-                .build();
 
-            for entry in walker.flatten() {
-                let path = entry.path();
+            // Separate include patterns into local and cross-workspace
+            let (local_includes, cross_workspace_includes): (Vec<_>, Vec<_>) =
+                include.iter().partition(|p| !p.starts_with("../"));
 
+            // Helper to process a file
+            let mut process_file = |path: &Path, root: &Path, patterns: &[&String]| {
                 if path.extension().is_some_and(|e| e == "rs") {
-                    let relative = path.strip_prefix(project_root).unwrap_or(path);
+                    let relative = path.strip_prefix(root).unwrap_or(path);
                     let relative_str = relative.to_string_lossy();
 
-                    let included = include
+                    let included = patterns
                         .iter()
                         .any(|pattern| glob_match(&relative_str, pattern));
 
@@ -668,13 +704,66 @@ pub async fn build_dashboard_data(
                         && !excluded
                         && let Ok(content) = std::fs::read_to_string(path)
                     {
+                        // Use canonicalized path as key for consistent lookups
+                        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
                         let code_units = extract_rust(path, &content);
                         if !code_units.is_empty() {
-                            impl_code_units.insert(path.to_path_buf(), code_units.units);
+                            impl_code_units.insert(canonical.clone(), code_units.units);
                         }
                         // Also collect for search index
-                        all_file_contents.insert(path.to_path_buf(), content);
+                        all_file_contents.insert(canonical, content);
                     }
+                }
+            };
+
+            // Walk local patterns from project root
+            if !local_includes.is_empty() || include.is_empty() {
+                let walker = ignore::WalkBuilder::new(project_root)
+                    .follow_links(true)
+                    .hidden(false)
+                    .git_ignore(true)
+                    .build();
+
+                for entry in walker.flatten() {
+                    process_file(entry.path(), project_root, &local_includes);
+                }
+            }
+
+            // Walk cross-workspace patterns
+            for pattern in cross_workspace_includes {
+                // Extract base path (e.g., "../marq" from "../marq/**/*.rs")
+                let base_path =
+                    if let Some(wildcard_pos) = pattern.find("**").or_else(|| pattern.find('*')) {
+                        pattern[..wildcard_pos].trim_end_matches('/')
+                    } else {
+                        pattern.as_str()
+                    };
+
+                let resolved_path = project_root.join(base_path);
+
+                // Check if path exists
+                if !resolved_path.exists() {
+                    eprintln!("Warning: Cross-workspace path not found: {}", base_path);
+                    eprintln!("  Pattern: {}", pattern);
+                    continue;
+                }
+
+                let walker = ignore::WalkBuilder::new(&resolved_path)
+                    .follow_links(true)
+                    .hidden(false)
+                    .git_ignore(true)
+                    .build();
+
+                // Adjust pattern to be relative to resolved path
+                let adjusted_pattern = if let Some(suffix) = pattern.strip_prefix(base_path) {
+                    suffix.trim_start_matches('/').to_string()
+                } else {
+                    pattern.to_string()
+                };
+
+                for entry in walker.flatten() {
+                    process_file(entry.path(), &resolved_path, &[&adjusted_pattern]);
                 }
             }
 
@@ -684,7 +773,13 @@ pub async fn build_dashboard_data(
             let mut file_entries = Vec::new();
 
             for (path, units) in &impl_code_units {
-                let relative = path.strip_prefix(project_root).unwrap_or(path);
+                // Compute relative path, preserving ../ for cross-workspace files
+                let relative_display = if let Ok(rel) = path.strip_prefix(&abs_root) {
+                    rel.display().to_string()
+                } else {
+                    compute_relative_path(&abs_root, path)
+                };
+
                 let file_total = units.len();
                 let file_covered = units.iter().filter(|u| !u.req_refs.is_empty()).count();
 
@@ -692,7 +787,7 @@ pub async fn build_dashboard_data(
                 covered_units += file_covered;
 
                 file_entries.push(ApiFileEntry {
-                    path: relative.display().to_string(),
+                    path: relative_display,
                     total_units: file_total,
                     covered_units: file_covered,
                 });
@@ -1243,6 +1338,8 @@ async fn api_file(
 
     let file_path = urlencoding::decode(&path).unwrap_or_default();
     let full_path = state.project_root.join(file_path.as_ref());
+    // Canonicalize to handle cross-workspace paths like ../marq/...
+    let full_path = full_path.canonicalize().unwrap_or(full_path);
     let data = state.data.borrow().clone();
 
     // Get impl key to find the right code units map
@@ -1379,6 +1476,8 @@ async fn api_check_git(
 
     let file_path = urlencoding::decode(&path).unwrap_or_default();
     let full_path = state.project_root.join(file_path.as_ref());
+    // Canonicalize to handle cross-workspace paths like ../marq/...
+    let full_path = full_path.canonicalize().unwrap_or(full_path);
 
     Json(ApiGitCheck {
         in_git: is_file_in_git(&full_path),
@@ -1416,6 +1515,8 @@ async fn api_file_range(
 
     let file_path = urlencoding::decode(&path).unwrap_or_default();
     let full_path = state.project_root.join(file_path.as_ref());
+    // Canonicalize to handle cross-workspace paths like ../marq/...
+    let full_path = full_path.canonicalize().unwrap_or(full_path);
 
     if let Ok(content) = std::fs::read(&full_path) {
         if end > start && end <= content.len() {
@@ -1485,6 +1586,8 @@ async fn api_update_file_range(
 ) -> impl IntoResponse {
     let file_path = urlencoding::decode(&req.path).unwrap_or_default();
     let full_path = state.project_root.join(file_path.as_ref());
+    // Canonicalize to handle cross-workspace paths like ../marq/...
+    let full_path = full_path.canonicalize().unwrap_or(full_path);
 
     if let Ok(original_content) = std::fs::read(&full_path) {
         // r[impl dashboard.editing.api.hash-conflict]
