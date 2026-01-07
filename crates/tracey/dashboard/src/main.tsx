@@ -7,7 +7,7 @@ import "./style.css";
 import { getDeviconClass, modKey, TAB_ICON_NAMES } from "./config";
 
 // Modules
-import { useApi, UseApiResult } from "./hooks";
+import { type UseApiResult, useApi } from "./hooks";
 import { buildUrl } from "./router";
 // Types
 import type {
@@ -642,7 +642,10 @@ function App() {
         route(buildUrl(currentSpec, currentImpl, "spec", { rule: result.id }));
       } else {
         route(
-          buildUrl(currentSpec, currentImpl, "sources", { file: result.id, line: result.line }),
+          buildUrl(currentSpec, currentImpl, "sources", {
+            file: result.id,
+            line: result.line,
+          }),
         );
       }
     },

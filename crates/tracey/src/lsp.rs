@@ -12,7 +12,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use eyre::Result;
-use tokio::sync::watch;
 use tower_lsp::jsonrpc::Result as LspResult;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
@@ -39,8 +38,6 @@ const SEMANTIC_TOKEN_MODIFIERS: &[SemanticTokenModifier] = &[
 /// r[impl cli.lsp]
 pub async fn run(root: Option<PathBuf>, config_path: Option<PathBuf>) -> Result<()> {
     use crate::serve::build_dashboard_data;
-    use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode};
-    use std::time::Duration;
 
     // Determine project root
     let project_root = match root {
@@ -50,75 +47,53 @@ pub async fn run(root: Option<PathBuf>, config_path: Option<PathBuf>) -> Result<
 
     // Load config
     let config_path = config_path.unwrap_or_else(|| project_root.join(".config/tracey/config.kdl"));
-    let config = crate::load_config(&config_path)?;
 
     // Build initial dashboard data (quiet mode - no stderr output since LSP uses stdio)
+    let config = crate::load_config(&config_path)?;
     let initial_data = build_dashboard_data(&project_root, &config, 1, true).await?;
 
-    // Create watch channel for data
-    let (data_tx, data_rx) = watch::channel(Arc::new(initial_data));
-
-    // r[impl lsp.lifecycle.config-watch]
-    // Spawn file watcher for config and source files
-    let watch_root = project_root.clone();
-    let watch_config_path = config_path.clone();
-    tokio::spawn(async move {
-        let (tx, rx) = std::sync::mpsc::channel();
-
-        let mut debouncer = match new_debouncer(Duration::from_millis(500), tx) {
-            Ok(d) => d,
-            Err(_) => return, // Silent fail - LSP will work without watching
-        };
-
-        // Watch the config file specifically
-        if let Some(config_dir) = watch_config_path.parent() {
-            let _ = debouncer
-                .watcher()
-                .watch(config_dir, RecursiveMode::NonRecursive);
-        }
-
-        // Watch the entire project root for source file changes
-        let _ = debouncer
-            .watcher()
-            .watch(&watch_root, RecursiveMode::Recursive);
-
-        while let Ok(Ok(_events)) = rx.recv() {
-            // Reload config and rebuild data
-            if let Ok(new_config) = crate::load_config(&watch_config_path)
-                && let Ok(new_data) = build_dashboard_data(&watch_root, &new_config, 1, true).await
-            {
-                let _ = data_tx.send(Arc::new(new_data));
-            }
-        }
-    });
-
     // Run LSP server
-    run_lsp_server(data_rx, project_root).await
+    run_lsp_server(Arc::new(initial_data), project_root, config_path).await
 }
 
 /// Internal: run the LSP server with pre-built data
 async fn run_lsp_server(
-    data_rx: watch::Receiver<Arc<DashboardData>>,
+    initial_data: Arc<DashboardData>,
     project_root: PathBuf,
+    config_path: PathBuf,
 ) -> Result<()> {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let (service, socket) = LspService::new(|client| Backend::new(client, data_rx, project_root));
+    let (service, socket) = LspService::new(|client| Backend {
+        client,
+        state: tokio::sync::Mutex::new(LspState {
+            data: initial_data.clone(),
+            documents: HashMap::new(),
+            project_root: project_root.clone(),
+            config_path: config_path.clone(),
+        }),
+    });
     Server::new(stdin, stdout, socket).serve(service).await;
 
     Ok(())
 }
 
 struct Backend {
-    #[allow(dead_code)]
     client: Client,
-    /// Receiver for dashboard data updates
-    data_rx: watch::Receiver<Arc<DashboardData>>,
+    state: tokio::sync::Mutex<LspState>,
+}
+
+struct LspState {
+    /// Dashboard data - rebuilt on each document change
+    data: Arc<DashboardData>,
+    /// Document content cache: uri -> content
+    documents: HashMap<String, String>,
     /// Project root for resolving paths
     project_root: PathBuf,
-    /// Document content cache: uri -> content
-    documents: std::sync::RwLock<HashMap<String, String>>,
+    /// Config file path (retained for future config watching)
+    #[allow(dead_code)]
+    config_path: PathBuf,
 }
 
 /// Simple Levenshtein distance for string similarity
@@ -164,237 +139,48 @@ struct ReqAtPosition {
     id_range: Range,
 }
 
-impl Backend {
-    fn new(
-        client: Client,
-        data_rx: watch::Receiver<Arc<DashboardData>>,
-        project_root: PathBuf,
-    ) -> Self {
-        Self {
-            client,
-            data_rx,
-            project_root,
-            documents: std::sync::RwLock::new(HashMap::new()),
-        }
-    }
-
-    /// Get current dashboard data
-    fn data(&self) -> Arc<DashboardData> {
-        self.data_rx.borrow().clone()
-    }
-
+impl LspState {
     /// Get all valid prefixes from configuration
     fn get_prefixes(&self) -> Vec<String> {
-        let data = self.data();
-        data.config.specs.iter().map(|s| s.prefix.clone()).collect()
+        self.data
+            .config
+            .specs
+            .iter()
+            .map(|s| s.prefix.clone())
+            .collect()
     }
 
     /// Get all requirement IDs with their descriptions from current data
     fn get_requirements(&self) -> Vec<(String, String, String)> {
-        let data = self.data();
         let mut reqs = Vec::new();
-
-        // Collect from all specs
-        for (impl_key, spec_data) in &data.forward_by_impl {
+        for (impl_key, spec_data) in &self.data.forward_by_impl {
             for rule in &spec_data.rules {
-                // (id, text, spec_name)
                 reqs.push((rule.id.clone(), rule.text.clone(), impl_key.0.clone()));
             }
         }
-
         reqs
     }
 
-    /// Compute diagnostics for a document
-    /// r[impl lsp.diagnostics.broken-refs]
-    /// r[impl lsp.diagnostics.unknown-prefix]
-    /// r[impl lsp.diagnostics.unknown-verb]
-    fn compute_diagnostics(&self, uri: &Url, content: &str) -> Vec<Diagnostic> {
-        use tracey_core::{RefVerb, Reqs, WarningKind};
-
-        let mut diagnostics = Vec::new();
-        let prefixes = self.get_prefixes();
-
-        // Build line starts for byte offset to line/column conversion
-        let line_starts: Vec<usize> = std::iter::once(0)
-            .chain(content.match_indices('\n').map(|(i, _)| i + 1))
-            .collect();
-
-        // Helper to convert byte offset to (line, column)
-        let offset_to_position = |offset: usize| -> Position {
-            let line = match line_starts.binary_search(&offset) {
-                Ok(line) => line,
-                Err(line) => line.saturating_sub(1),
-            };
-            let line_start = line_starts.get(line).copied().unwrap_or(0);
-            let column = offset.saturating_sub(line_start);
-            Position {
-                line: line as u32,
-                character: column as u32,
-            }
-        };
-
-        // Extract references from the content
-        let reqs = Reqs::extract_from_content(std::path::Path::new(""), content);
-
-        // r[impl lsp.diagnostics.impl-in-test]
-        // Check if this file is a test file (only verify allowed)
-        let data = self.data();
-        let is_test_file = uri
-            .to_file_path()
-            .ok()
-            .map(|p| data.test_files.contains(&p))
-            .unwrap_or(false);
-
-        // Check each reference
-        for reference in &reqs.references {
-            // r[impl lsp.diagnostics.impl-in-test]
-            // r[impl config.impl.test_include.verify-only]
-            if is_test_file && matches!(reference.verb, RefVerb::Impl) {
-                let start = offset_to_position(reference.span.offset);
-                let end = offset_to_position(reference.span.offset + reference.span.length);
-                diagnostics.push(Diagnostic {
-                    range: Range { start, end },
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    code: Some(NumberOrString::String("impl-in-test".to_string())),
-                    source: Some("tracey".to_string()),
-                    message: "Test files may only contain 'verify' annotations, not 'impl'"
-                        .to_string(),
-                    ..Default::default()
-                });
-                continue;
-            }
-            // r[impl lsp.diagnostics.unknown-prefix]
-            if !prefixes.contains(&reference.prefix) {
-                let start = offset_to_position(reference.span.offset);
-                let end = offset_to_position(reference.span.offset + reference.span.length);
-                diagnostics.push(Diagnostic {
-                    range: Range { start, end },
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    code: Some(NumberOrString::String("unknown-prefix".to_string())),
-                    source: Some("tracey".to_string()),
-                    message: format!(
-                        "Unknown prefix '{}'. Available prefixes: {}",
-                        reference.prefix,
-                        prefixes.join(", ")
-                    ),
-                    ..Default::default()
-                });
-                continue;
-            }
-
-            // r[impl lsp.diagnostics.broken-refs]
-            // Only check impl/verify/depends refs, not definitions
-            if !matches!(reference.verb, RefVerb::Define)
-                && self.find_requirement(&reference.req_id).is_none()
-            {
-                let start = offset_to_position(reference.span.offset);
-                let end = offset_to_position(reference.span.offset + reference.span.length);
-
-                // Find similar requirement IDs for suggestions
-                let similar = self.find_similar_requirements(&reference.req_id, 3);
-                let suggestion = if !similar.is_empty() {
-                    format!(". Did you mean '{}'?", similar.join("', '"))
-                } else {
-                    String::new()
-                };
-
-                diagnostics.push(Diagnostic {
-                    range: Range { start, end },
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    code: Some(NumberOrString::String("broken-ref".to_string())),
-                    source: Some("tracey".to_string()),
-                    message: format!("Unknown requirement '{}'{}", reference.req_id, suggestion),
-                    ..Default::default()
-                });
+    /// Find requirement by ID
+    fn find_requirement(&self, req_id: &str) -> Option<RequirementInfo> {
+        for (impl_key, spec_data) in &self.data.forward_by_impl {
+            for rule in &spec_data.rules {
+                if rule.id == req_id {
+                    return Some(RequirementInfo {
+                        id: rule.id.clone(),
+                        text: rule.text.clone(),
+                        source_file: rule.source_file.clone().unwrap_or_default(),
+                        source_line: rule.source_line,
+                        source_column: rule.source_column,
+                        impl_refs: rule.impl_refs.clone(),
+                        verify_refs: rule.verify_refs.clone(),
+                        depends_refs: rule.depends_refs.clone(),
+                        spec_name: impl_key.0.clone(),
+                    });
+                }
             }
         }
-
-        // r[impl lsp.diagnostics.unknown-verb]
-        for warning in &reqs.warnings {
-            if let WarningKind::UnknownVerb(verb) = &warning.kind {
-                let start = offset_to_position(warning.span.offset);
-                let end = offset_to_position(warning.span.offset + warning.span.length);
-                diagnostics.push(Diagnostic {
-                    range: Range { start, end },
-                    severity: Some(DiagnosticSeverity::WARNING),
-                    code: Some(NumberOrString::String("unknown-verb".to_string())),
-                    source: Some("tracey".to_string()),
-                    message: format!(
-                        "Unknown verb '{}'. Valid verbs: impl, verify, depends, related",
-                        verb
-                    ),
-                    ..Default::default()
-                });
-            }
-        }
-
-        // Check definitions for duplicates and orphaned rules
-        // (data was already retrieved above for test file check)
-
-        // r[impl lsp.diagnostics.duplicate-definition]
-        // Count definitions per ID to detect duplicates
-        let definitions: Vec<_> = reqs
-            .references
-            .iter()
-            .filter(|r| matches!(r.verb, RefVerb::Define))
-            .collect();
-
-        // Check each definition in this file
-        for (i, def) in definitions.iter().enumerate() {
-            // Check for duplicates within this file
-            let duplicate_in_file = definitions
-                .iter()
-                .enumerate()
-                .any(|(j, other)| i != j && other.req_id == def.req_id);
-
-            // Check for duplicates in other spec files (via global data)
-            let duplicate_in_other_file = data.forward_by_impl.values().any(|spec| {
-                spec.rules.iter().any(|rule| {
-                    rule.id == def.req_id
-                        && rule
-                            .source_file
-                            .as_ref()
-                            .is_some_and(|f| !uri.path().ends_with(f))
-                })
-            });
-
-            if duplicate_in_file || duplicate_in_other_file {
-                let start = offset_to_position(def.span.offset);
-                let end = offset_to_position(def.span.offset + def.span.length);
-                diagnostics.push(Diagnostic {
-                    range: Range { start, end },
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    code: Some(NumberOrString::String("duplicate-definition".to_string())),
-                    source: Some("tracey".to_string()),
-                    message: format!("Duplicate requirement definition '{}'", def.req_id),
-                    ..Default::default()
-                });
-            }
-
-            // r[impl lsp.diagnostics.orphaned]
-            // Check if this definition has any implementations
-            let has_impl = data.forward_by_impl.values().any(|spec| {
-                spec.rules
-                    .iter()
-                    .any(|rule| rule.id == def.req_id && !rule.impl_refs.is_empty())
-            });
-
-            if !has_impl {
-                let start = offset_to_position(def.span.offset);
-                let end = offset_to_position(def.span.offset + def.span.length);
-                diagnostics.push(Diagnostic {
-                    range: Range { start, end },
-                    severity: Some(DiagnosticSeverity::HINT),
-                    code: Some(NumberOrString::String("orphaned".to_string())),
-                    source: Some("tracey".to_string()),
-                    message: format!("Requirement '{}' has no implementations", def.req_id),
-                    ..Default::default()
-                });
-            }
-        }
-
-        diagnostics
+        None
     }
 
     /// Find requirement IDs similar to the given ID (for suggestions)
@@ -416,44 +202,9 @@ impl Backend {
         scored.into_iter().take(limit).map(|(id, _)| id).collect()
     }
 
-    /// Publish diagnostics for a document
-    /// r[impl lsp.diagnostics.on-change]
-    async fn publish_diagnostics(&self, uri: Url, content: &str) {
-        let diagnostics = self.compute_diagnostics(&uri, content);
-        self.client
-            .publish_diagnostics(uri, diagnostics, None)
-            .await;
-    }
-
-    /// Find requirement by ID
-    fn find_requirement(&self, req_id: &str) -> Option<RequirementInfo> {
-        let data = self.data();
-
-        for (impl_key, spec_data) in &data.forward_by_impl {
-            for rule in &spec_data.rules {
-                if rule.id == req_id {
-                    return Some(RequirementInfo {
-                        id: rule.id.clone(),
-                        text: rule.text.clone(),
-                        source_file: rule.source_file.clone().unwrap_or_default(),
-                        source_line: rule.source_line,
-                        source_column: rule.source_column,
-                        impl_refs: rule.impl_refs.clone(),
-                        verify_refs: rule.verify_refs.clone(),
-                        depends_refs: rule.depends_refs.clone(),
-                        spec_name: impl_key.0.clone(),
-                    });
-                }
-            }
-        }
-
-        None
-    }
-
     /// Find requirement reference at position in document
     fn find_req_at_position(&self, uri: &Url, position: Position) -> Option<ReqAtPosition> {
-        let docs = self.documents.read().ok()?;
-        let content = docs.get(uri.as_str())?;
+        let content = self.documents.get(uri.as_str())?;
 
         let lines: Vec<&str> = content.lines().collect();
         let line = lines.get(position.line as usize)?;
@@ -539,8 +290,7 @@ impl Backend {
 
     /// Get raw content after prefix[ up to cursor (for completion logic)
     fn get_completion_context(&self, uri: &Url, position: Position) -> Option<String> {
-        let docs = self.documents.read().ok()?;
-        let content = docs.get(uri.as_str())?;
+        let content = self.documents.get(uri.as_str())?;
 
         let lines: Vec<&str> = content.lines().collect();
         let line = lines.get(position.line as usize)?;
@@ -560,6 +310,234 @@ impl Backend {
         }
 
         None
+    }
+
+    /// Store document content when opened
+    fn document_opened(&mut self, uri: &Url, content: String) {
+        self.documents.insert(uri.to_string(), content);
+    }
+
+    /// Update document content when changed
+    fn document_changed(&mut self, uri: &Url, content: String) {
+        self.documents.insert(uri.to_string(), content);
+    }
+
+    /// Get document content (for save handler)
+    fn get_document_content(&self, uri: &Url) -> Option<String> {
+        self.documents.get(uri.as_str()).cloned()
+    }
+
+    /// Remove document when closed
+    fn document_closed(&mut self, uri: &Url) {
+        self.documents.remove(uri.as_str());
+    }
+}
+
+impl Backend {
+    /// Lock state and get access to all LSP state
+    async fn state(&self) -> tokio::sync::MutexGuard<'_, LspState> {
+        self.state.lock().await
+    }
+
+    /// Compute diagnostics for a document
+    /// r[impl lsp.diagnostics.broken-refs]
+    /// r[impl lsp.diagnostics.unknown-prefix]
+    /// r[impl lsp.diagnostics.unknown-verb]
+    async fn compute_diagnostics(&self, uri: &Url, content: &str) -> Vec<Diagnostic> {
+        use tracey_core::{RefVerb, Reqs, WarningKind};
+
+        let state = self.state().await;
+        let mut diagnostics = Vec::new();
+        let prefixes = state.get_prefixes();
+
+        // Build line starts for byte offset to line/column conversion
+        let line_starts: Vec<usize> = std::iter::once(0)
+            .chain(content.match_indices('\n').map(|(i, _)| i + 1))
+            .collect();
+
+        // Helper to convert byte offset to (line, column)
+        let offset_to_position = |offset: usize| -> Position {
+            let line = match line_starts.binary_search(&offset) {
+                Ok(line) => line,
+                Err(line) => line.saturating_sub(1),
+            };
+            let line_start = line_starts.get(line).copied().unwrap_or(0);
+            let column = offset.saturating_sub(line_start);
+            Position {
+                line: line as u32,
+                character: column as u32,
+            }
+        };
+
+        // Extract references from the content
+        let reqs = Reqs::extract_from_content(std::path::Path::new(""), content);
+
+        // r[impl lsp.diagnostics.impl-in-test]
+        // Check if this file is a test file (only verify allowed)
+        let is_test_file = uri
+            .to_file_path()
+            .ok()
+            .map(|p| state.data.test_files.contains(&p))
+            .unwrap_or(false);
+
+        // Check each reference
+        for reference in &reqs.references {
+            // r[impl lsp.diagnostics.impl-in-test]
+            // r[impl config.impl.test_include.verify-only]
+            if is_test_file && matches!(reference.verb, RefVerb::Impl) {
+                let start = offset_to_position(reference.span.offset);
+                let end = offset_to_position(reference.span.offset + reference.span.length);
+                diagnostics.push(Diagnostic {
+                    range: Range { start, end },
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    code: Some(NumberOrString::String("impl-in-test".to_string())),
+                    source: Some("tracey".to_string()),
+                    message: "Test files may only contain 'verify' annotations, not 'impl'"
+                        .to_string(),
+                    ..Default::default()
+                });
+                continue;
+            }
+            // r[impl lsp.diagnostics.unknown-prefix]
+            if !prefixes.contains(&reference.prefix) {
+                let start = offset_to_position(reference.span.offset);
+                let end = offset_to_position(reference.span.offset + reference.span.length);
+                diagnostics.push(Diagnostic {
+                    range: Range { start, end },
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    code: Some(NumberOrString::String("unknown-prefix".to_string())),
+                    source: Some("tracey".to_string()),
+                    message: format!(
+                        "Unknown prefix '{}'. Available prefixes: {}",
+                        reference.prefix,
+                        prefixes.join(", ")
+                    ),
+                    ..Default::default()
+                });
+                continue;
+            }
+
+            // r[impl lsp.diagnostics.broken-refs]
+            // Only check impl/verify/depends refs, not definitions
+            if !matches!(reference.verb, RefVerb::Define)
+                && state.find_requirement(&reference.req_id).is_none()
+            {
+                let start = offset_to_position(reference.span.offset);
+                let end = offset_to_position(reference.span.offset + reference.span.length);
+
+                // Find similar requirement IDs for suggestions
+                let similar = state.find_similar_requirements(&reference.req_id, 3);
+                let suggestion = if !similar.is_empty() {
+                    format!(". Did you mean '{}'?", similar.join("', '"))
+                } else {
+                    String::new()
+                };
+
+                diagnostics.push(Diagnostic {
+                    range: Range { start, end },
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    code: Some(NumberOrString::String("broken-ref".to_string())),
+                    source: Some("tracey".to_string()),
+                    message: format!("Unknown requirement '{}'{}", reference.req_id, suggestion),
+                    ..Default::default()
+                });
+            }
+        }
+
+        // r[impl lsp.diagnostics.unknown-verb]
+        for warning in &reqs.warnings {
+            if let WarningKind::UnknownVerb(verb) = &warning.kind {
+                let start = offset_to_position(warning.span.offset);
+                let end = offset_to_position(warning.span.offset + warning.span.length);
+                diagnostics.push(Diagnostic {
+                    range: Range { start, end },
+                    severity: Some(DiagnosticSeverity::WARNING),
+                    code: Some(NumberOrString::String("unknown-verb".to_string())),
+                    source: Some("tracey".to_string()),
+                    message: format!(
+                        "Unknown verb '{}'. Valid verbs: impl, verify, depends, related",
+                        verb
+                    ),
+                    ..Default::default()
+                });
+            }
+        }
+
+        // Check definitions for duplicates and orphaned rules
+        // (data was already retrieved above for test file check)
+
+        // r[impl lsp.diagnostics.duplicate-definition]
+        // Count definitions per ID to detect duplicates
+        let definitions: Vec<_> = reqs
+            .references
+            .iter()
+            .filter(|r| matches!(r.verb, RefVerb::Define))
+            .collect();
+
+        // Check each definition in this file
+        for (i, def) in definitions.iter().enumerate() {
+            // Check for duplicates within this file
+            let duplicate_in_file = definitions
+                .iter()
+                .enumerate()
+                .any(|(j, other)| i != j && other.req_id == def.req_id);
+
+            // Check for duplicates in other spec files (via global data)
+            let duplicate_in_other_file = state.data.forward_by_impl.values().any(|spec| {
+                spec.rules.iter().any(|rule| {
+                    rule.id == def.req_id
+                        && rule
+                            .source_file
+                            .as_ref()
+                            .is_some_and(|f| !uri.path().ends_with(f))
+                })
+            });
+
+            if duplicate_in_file || duplicate_in_other_file {
+                let start = offset_to_position(def.span.offset);
+                let end = offset_to_position(def.span.offset + def.span.length);
+                diagnostics.push(Diagnostic {
+                    range: Range { start, end },
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    code: Some(NumberOrString::String("duplicate-definition".to_string())),
+                    source: Some("tracey".to_string()),
+                    message: format!("Duplicate requirement definition '{}'", def.req_id),
+                    ..Default::default()
+                });
+            }
+
+            // r[impl lsp.diagnostics.orphaned]
+            // Check if this definition has any implementations
+            let has_impl = state.data.forward_by_impl.values().any(|spec| {
+                spec.rules
+                    .iter()
+                    .any(|rule| rule.id == def.req_id && !rule.impl_refs.is_empty())
+            });
+
+            if !has_impl {
+                let start = offset_to_position(def.span.offset);
+                let end = offset_to_position(def.span.offset + def.span.length);
+                diagnostics.push(Diagnostic {
+                    range: Range { start, end },
+                    severity: Some(DiagnosticSeverity::HINT),
+                    code: Some(NumberOrString::String("orphaned".to_string())),
+                    source: Some("tracey".to_string()),
+                    message: format!("Requirement '{}' has no implementations", def.req_id),
+                    ..Default::default()
+                });
+            }
+        }
+
+        diagnostics
+    }
+
+    /// Publish diagnostics for a document
+    /// r[impl lsp.diagnostics.on-change]
+    async fn publish_diagnostics(&self, uri: Url, content: &str) {
+        let diagnostics = self.compute_diagnostics(&uri, content).await;
+        self.client
+            .publish_diagnostics(uri, diagnostics, None)
+            .await;
     }
 }
 
@@ -658,10 +636,7 @@ impl LanguageServer for Backend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.clone();
         let content = params.text_document.text.clone();
-        if let Ok(mut docs) = self.documents.write() {
-            docs.insert(uri.to_string(), content.clone());
-        }
-        // Publish diagnostics for the opened document
+        self.state().await.document_opened(&uri, content.clone());
         self.publish_diagnostics(uri, &content).await;
     }
 
@@ -670,10 +645,7 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri.clone();
         if let Some(change) = params.content_changes.into_iter().next() {
             let content = change.text.clone();
-            if let Ok(mut docs) = self.documents.write() {
-                docs.insert(uri.to_string(), content.clone());
-            }
-            // Publish diagnostics for the changed document
+            self.state().await.document_changed(&uri, content.clone());
             self.publish_diagnostics(uri, &content).await;
         }
     }
@@ -681,11 +653,7 @@ impl LanguageServer for Backend {
     // r[impl lsp.diagnostics.on-save]
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = params.text_document.uri.clone();
-        // Re-compute diagnostics on save for accurate results
-        let content = {
-            let docs = self.documents.read();
-            docs.ok().and_then(|d| d.get(uri.as_str()).cloned())
-        };
+        let content = self.state().await.get_document_content(&uri);
         if let Some(content) = content {
             self.publish_diagnostics(uri, &content).await;
         }
@@ -693,19 +661,17 @@ impl LanguageServer for Backend {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri.clone();
-        if let Ok(mut docs) = self.documents.write() {
-            docs.remove(uri.as_str());
-        }
-        // Clear diagnostics when file is closed
+        self.state().await.document_closed(&uri);
         self.client.publish_diagnostics(uri, vec![], None).await;
     }
 
     // r[impl lsp.completions.req-id]
     async fn completion(&self, params: CompletionParams) -> LspResult<Option<CompletionResponse>> {
+        let state = self.state().await;
         let uri = &params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
 
-        let Some(raw) = self.get_completion_context(uri, position) else {
+        let Some(raw) = state.get_completion_context(uri, position) else {
             return Ok(None);
         };
 
@@ -742,7 +708,7 @@ impl LanguageServer for Backend {
         };
 
         // r[impl lsp.completions.req-id-fuzzy]
-        let requirements = self.get_requirements();
+        let requirements = state.get_requirements();
         let items: Vec<CompletionItem> = requirements
             .iter()
             .filter(|(id, _, _)| req_prefix.is_empty() || id.contains(req_prefix))
@@ -770,14 +736,15 @@ impl LanguageServer for Backend {
 
     // r[impl lsp.hover.req-reference]
     async fn hover(&self, params: HoverParams) -> LspResult<Option<Hover>> {
+        let state = self.state().await;
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
-        let Some(req) = self.find_req_at_position(uri, position) else {
+        let Some(req) = state.find_req_at_position(uri, position) else {
             return Ok(None);
         };
 
-        if let Some(info) = self.find_requirement(&req.id) {
+        if let Some(info) = state.find_requirement(&req.id) {
             // r[impl lsp.hover.req-reference-format]
             // Coverage info (impl/test counts) is shown via inlay hints, so hover just shows the requirement text
             let content = format!(
@@ -812,19 +779,20 @@ impl LanguageServer for Backend {
         &self,
         params: GotoDefinitionParams,
     ) -> LspResult<Option<GotoDefinitionResponse>> {
+        let state = self.state().await;
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
-        let Some(req) = self.find_req_at_position(uri, position) else {
+        let Some(req) = state.find_req_at_position(uri, position) else {
             return Ok(None);
         };
 
-        let Some(info) = self.find_requirement(&req.id) else {
+        let Some(info) = state.find_requirement(&req.id) else {
             return Ok(None);
         };
 
         // Construct path to spec file
-        let spec_path = self.project_root.join(&info.source_file);
+        let spec_path = state.project_root.join(&info.source_file);
 
         let Ok(target_uri) = Url::from_file_path(&spec_path) else {
             return Ok(None);
@@ -855,14 +823,15 @@ impl LanguageServer for Backend {
         &self,
         params: GotoDefinitionParams,
     ) -> LspResult<Option<GotoDefinitionResponse>> {
+        let state = self.state().await;
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
-        let Some(req) = self.find_req_at_position(uri, position) else {
+        let Some(req) = state.find_req_at_position(uri, position) else {
             return Ok(None);
         };
 
-        let Some(info) = self.find_requirement(&req.id) else {
+        let Some(info) = state.find_requirement(&req.id) else {
             return Ok(None);
         };
 
@@ -871,11 +840,12 @@ impl LanguageServer for Backend {
         }
 
         // Convert impl refs to locations
+        let project_root = &state.project_root;
         let locations: Vec<Location> = info
             .impl_refs
             .iter()
             .filter_map(|r| {
-                let path = self.project_root.join(&r.file);
+                let path = project_root.join(&r.file);
                 let uri = Url::from_file_path(&path).ok()?;
                 let line = r.line.saturating_sub(1) as u32;
                 Some(Location {
@@ -905,22 +875,24 @@ impl LanguageServer for Backend {
     // r[impl lsp.references.from-reference]
     // r[impl lsp.references.from-definition]
     async fn references(&self, params: ReferenceParams) -> LspResult<Option<Vec<Location>>> {
+        let state = self.state().await;
         let uri = &params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
 
-        let Some(req) = self.find_req_at_position(uri, position) else {
+        let Some(req) = state.find_req_at_position(uri, position) else {
             return Ok(None);
         };
 
-        let Some(info) = self.find_requirement(&req.id) else {
+        let Some(info) = state.find_requirement(&req.id) else {
             return Ok(None);
         };
 
         let mut locations = Vec::new();
+        let project_root = &state.project_root;
 
         // Helper to convert ApiCodeRef to Location
         let to_location = |r: &crate::serve::ApiCodeRef| -> Option<Location> {
-            let path = self.project_root.join(&r.file);
+            let path = project_root.join(&r.file);
             let uri = Url::from_file_path(&path).ok()?;
             let line = r.line.saturating_sub(1) as u32;
             Some(Location {
@@ -935,7 +907,7 @@ impl LanguageServer for Backend {
         // Add definition location if include_declaration is true
         if params.context.include_declaration
             && !info.source_file.is_empty()
-            && let Ok(uri) = Url::from_file_path(self.project_root.join(&info.source_file))
+            && let Ok(uri) = Url::from_file_path(project_root.join(&info.source_file))
         {
             let line = info
                 .source_line
@@ -971,15 +943,17 @@ impl LanguageServer for Backend {
     }
 
     // r[impl lsp.highlight.full-range]
+    // r[impl lsp.highlight.consistent]
     async fn document_highlight(
         &self,
         params: DocumentHighlightParams,
     ) -> LspResult<Option<Vec<DocumentHighlight>>> {
+        let state = self.state().await;
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
         // Find requirement at position and return its full range
-        let Some(req) = self.find_req_at_position(uri, position) else {
+        let Some(req) = state.find_req_at_position(uri, position) else {
             return Ok(None);
         };
 
@@ -995,12 +969,10 @@ impl LanguageServer for Backend {
         &self,
         params: DocumentSymbolParams,
     ) -> LspResult<Option<DocumentSymbolResponse>> {
+        let state = self.state().await;
         let uri = params.text_document.uri.to_string();
 
-        let docs = self.documents.read().ok();
-        let content = docs.as_ref().and_then(|d| d.get(&uri));
-
-        let Some(content) = content else {
+        let Some(content) = state.documents.get(&uri) else {
             return Ok(None);
         };
 
@@ -1079,17 +1051,17 @@ impl LanguageServer for Backend {
         &self,
         params: WorkspaceSymbolParams,
     ) -> LspResult<Option<Vec<SymbolInformation>>> {
+        let state = self.state().await;
         let query = params.query.to_lowercase();
-        let data = self.data();
 
         let mut symbols = Vec::new();
 
-        for spec_data in data.forward_by_impl.values() {
+        for spec_data in state.data.forward_by_impl.values() {
             for rule in &spec_data.rules {
                 // Match if query is empty or requirement ID contains query
                 if (query.is_empty() || rule.id.to_lowercase().contains(&query))
                     && let Some(ref source_file) = rule.source_file
-                    && let Ok(uri) = Url::from_file_path(self.project_root.join(source_file))
+                    && let Ok(uri) = Url::from_file_path(state.project_root.join(source_file))
                 {
                     let line = rule
                         .source_line
@@ -1138,15 +1110,16 @@ impl LanguageServer for Backend {
         &self,
         params: TextDocumentPositionParams,
     ) -> LspResult<Option<PrepareRenameResponse>> {
+        let state = self.state().await;
         let uri = &params.text_document.uri;
         let position = params.position;
 
-        let Some(req) = self.find_req_at_position(uri, position) else {
+        let Some(req) = state.find_req_at_position(uri, position) else {
             return Ok(None);
         };
 
         // Check if requirement exists
-        if self.find_requirement(&req.id).is_none() {
+        if state.find_requirement(&req.id).is_none() {
             return Ok(None);
         }
 
@@ -1157,15 +1130,16 @@ impl LanguageServer for Backend {
 
     // r[impl lsp.rename.req-id]
     async fn rename(&self, params: RenameParams) -> LspResult<Option<WorkspaceEdit>> {
+        let state = self.state().await;
         let uri = &params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let new_name = &params.new_name;
 
-        let Some(req) = self.find_req_at_position(uri, position) else {
+        let Some(req) = state.find_req_at_position(uri, position) else {
             return Ok(None);
         };
 
-        let Some(info) = self.find_requirement(&req.id) else {
+        let Some(info) = state.find_requirement(&req.id) else {
             return Ok(None);
         };
 
@@ -1187,7 +1161,7 @@ impl LanguageServer for Backend {
         }
 
         // Check if new name conflicts with existing requirement
-        if self.find_requirement(new_name).is_some() {
+        if state.find_requirement(new_name).is_some() {
             return Err(tower_lsp::jsonrpc::Error::invalid_params(format!(
                 "Requirement '{}' already exists",
                 new_name
@@ -1196,10 +1170,11 @@ impl LanguageServer for Backend {
 
         let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
             std::collections::HashMap::new();
+        let project_root = &state.project_root;
 
         // Helper to add a text edit
         let mut add_edit = |file: &str, line: usize, old_id: &str, new_id: &str| {
-            let path = self.project_root.join(file);
+            let path = project_root.join(file);
             if let Ok(uri) = Url::from_file_path(&path)
                 && let Ok(content) = std::fs::read_to_string(&path)
                 && let Some(file_line) = content.lines().nth(line.saturating_sub(1))
@@ -1265,18 +1240,14 @@ impl LanguageServer for Backend {
     ) -> LspResult<Option<SemanticTokensResult>> {
         use tracey_core::{RefVerb, Reqs};
 
+        let state = self.state().await;
         let uri = &params.text_document.uri;
 
-        let content = {
-            let docs = self.documents.read();
-            docs.ok().and_then(|d| d.get(uri.as_str()).cloned())
-        };
-
-        let Some(content) = content else {
+        let Some(content) = state.get_document_content(uri) else {
             return Ok(None);
         };
 
-        let prefixes = self.get_prefixes();
+        let prefixes = state.get_prefixes();
         let reqs = Reqs::extract_from_content(std::path::Path::new(""), &content);
 
         // Build line starts for byte offset to line/column conversion
@@ -1353,17 +1324,18 @@ impl LanguageServer for Backend {
     // r[impl lsp.actions.create-requirement]
     // r[impl lsp.actions.open-dashboard]
     async fn code_action(&self, params: CodeActionParams) -> LspResult<Option<CodeActionResponse>> {
+        let state = self.state().await;
         let uri = &params.text_document.uri;
         let position = params.range.start;
 
-        let Some(req) = self.find_req_at_position(uri, position) else {
+        let Some(req) = state.find_req_at_position(uri, position) else {
             return Ok(None);
         };
 
         let mut actions = Vec::new();
 
         // Check if requirement exists
-        let req_exists = self.find_requirement(&req.id).is_some();
+        let req_exists = state.find_requirement(&req.id).is_some();
 
         if !req_exists {
             // r[impl lsp.actions.create-requirement]
@@ -1426,12 +1398,12 @@ impl LanguageServer for Backend {
             )
             .await;
 
-        let content = {
-            let docs = match self.documents.read() {
-                Ok(d) => d,
-                Err(_) => return Ok(None),
-            };
-            docs.get(uri.as_str()).cloned()
+        // Get content and prefixes from state
+        let (content, prefixes) = {
+            let state = self.state().await;
+            let content = state.get_document_content(uri);
+            let prefixes = state.get_prefixes();
+            (content, prefixes)
         };
 
         let Some(content) = content else {
@@ -1440,8 +1412,6 @@ impl LanguageServer for Backend {
                 .await;
             return Ok(None);
         };
-
-        let prefixes = self.get_prefixes();
 
         // For markdown files, use marq to extract requirement definitions
         let markdown_reqs = if is_markdown {
@@ -1498,6 +1468,9 @@ impl LanguageServer for Backend {
             )
             .await;
 
+        // Re-lock state for requirement lookups (after async calls are done)
+        let state = self.state().await;
+
         // Log first few reqs to understand positioning
         for (i, req_def) in markdown_reqs.iter().take(5).enumerate() {
             let marker_line_end = content[req_def.span.offset..]
@@ -1537,7 +1510,7 @@ impl LanguageServer for Backend {
             in_range_ids.push(format!("{}@L{}", req_def.id, position.line));
 
             // Look up the requirement coverage
-            let label = if let Some(req_info) = self.find_requirement(&req_def.id) {
+            let label = if let Some(req_info) = state.find_requirement(&req_def.id) {
                 let impl_count = req_info.impl_refs.len();
                 let verify_count = req_info.verify_refs.len();
 
@@ -1586,7 +1559,7 @@ impl LanguageServer for Backend {
             }
 
             // Look up the requirement
-            let label = if let Some(req_info) = self.find_requirement(&reference.req_id) {
+            let label = if let Some(req_info) = state.find_requirement(&reference.req_id) {
                 let impl_count = req_info.impl_refs.len();
                 let verify_count = req_info.verify_refs.len();
 
@@ -1665,19 +1638,17 @@ impl LanguageServer for Backend {
         let uri = &params.text_document.uri;
         let is_markdown = uri.path().ends_with(".md");
 
-        let content = {
-            let docs = match self.documents.read() {
-                Ok(d) => d,
-                Err(_) => return Ok(None),
-            };
-            docs.get(uri.as_str()).cloned()
+        // Get content and prefixes from state
+        let (content, prefixes) = {
+            let state = self.state().await;
+            let content = state.get_document_content(uri);
+            let prefixes = state.get_prefixes();
+            (content, prefixes)
         };
 
         let Some(content) = content else {
             return Ok(None);
         };
-
-        let prefixes = self.get_prefixes();
 
         // For markdown files, use marq to extract requirement definitions
         let markdown_reqs = if is_markdown {
@@ -1711,6 +1682,9 @@ impl LanguageServer for Backend {
 
         let mut lenses = Vec::new();
 
+        // Re-lock state for requirement lookups
+        let state = self.state().await;
+
         // Process markdown requirement definitions
         for req_def in &markdown_reqs {
             // Range should be just the marker line, not the entire content block
@@ -1726,7 +1700,7 @@ impl LanguageServer for Backend {
             };
 
             // r[impl lsp.codelens.coverage]
-            if let Some(req_info) = self.find_requirement(&req_def.id) {
+            if let Some(req_info) = state.find_requirement(&req_def.id) {
                 let impl_count = req_info.impl_refs.len();
                 let verify_count = req_info.verify_refs.len();
 
@@ -1769,7 +1743,7 @@ impl LanguageServer for Backend {
                 // r[impl lsp.codelens.coverage]
                 // Show coverage counts on requirement definitions
                 RefVerb::Define => {
-                    if let Some(req_info) = self.find_requirement(&reference.req_id) {
+                    if let Some(req_info) = state.find_requirement(&reference.req_id) {
                         let impl_count = req_info.impl_refs.len();
                         let verify_count = req_info.verify_refs.len();
 

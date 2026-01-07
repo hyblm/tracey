@@ -19,12 +19,21 @@ fn main() {
 }
 
 fn install() {
+    // Build release binary
     let status = Command::new("cargo")
-        .args(["install", "--path", "./crates/tracey"])
+        .args(["build", "--release", "-p", "tracey"])
         .status()
-        .expect("Failed to run cargo install");
+        .expect("Failed to run cargo build");
 
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
+
+    // Copy to ~/.cargo/bin
+    let home = std::env::var("HOME").expect("HOME not set");
+    let src = "target/release/tracey";
+    let dst = format!("{}/.cargo/bin/tracey", home);
+
+    std::fs::copy(src, &dst).expect("Failed to copy binary");
+    println!("Installed tracey to {}", dst);
 }

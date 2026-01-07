@@ -381,6 +381,12 @@ The configuration file MUST be in KDL format.
 r[config.path.default]
 The default configuration path MUST be `.config/tracey/config.kdl` relative to the project root.
 
+r[config.optional]
+The configuration file MUST be optional. The MCP server, HTTP server, and LSP MUST start correctly even when no configuration file exists, providing empty/default responses until a configuration is available.
+
+r[config.watch-creation]
+When started without a configuration file, tracey MUST watch for the creation of the configuration file and automatically load it when it appears.
+
 > r[config.schema]
 > The configuration MUST follow this schema:
 >
@@ -1188,18 +1194,6 @@ Reference results MUST indicate the reference type (impl, verify, depends, relat
 r[lsp.actions.create-requirement]
 When the cursor is on an undefined requirement reference, the server MUST offer a code action to create the requirement definition in the appropriate spec file.
 
-> r[lsp.actions.create-requirement-template]
-> The created requirement MUST be inserted as a blockquote at the end of the most appropriate section (matching the first segment of the requirement ID if possible).
->
-> Example for `r[impl auth.token.new-feature]`:
-> ```markdown
-> > r[auth.token.new-feature]
-> > TODO: Define requirement
-> ```
-
-r[lsp.actions.copy-req-id]
-The server MUST offer a code action to copy the requirement ID to clipboard when the cursor is on a requirement definition or reference.
-
 r[lsp.actions.open-dashboard]
 The server MUST offer a code action to open the requirement in the tracey dashboard when the cursor is on a requirement definition or reference.
 
@@ -1224,9 +1218,6 @@ Completions MUST be triggered automatically when typing inside brackets after a 
 
 r[lsp.symbols.requirements]
 The server MUST provide document symbols for requirement definitions in spec files, enabling outline views and breadcrumb navigation.
-
-> r[lsp.symbols.hierarchy]
-> Requirement symbols MUST be nested under their containing markdown headings in the symbol hierarchy.
 
 r[lsp.symbols.references]
 The server MAY provide document symbols for requirement references in source files, showing which requirements are referenced in each file.
@@ -1282,51 +1273,6 @@ The server MAY provide inlay hints after requirement references showing coverage
 
 r[lsp.inlay.impl-count]
 The server MAY provide inlay hints after requirement definitions showing implementation counts (e.g., `← 3 impls`).
-
-r[lsp.inlay.configurable]
-Inlay hints MUST be configurable, allowing users to enable/disable specific hint types.
-
-### Call Hierarchy
-
-r[lsp.callhierarchy.depends]
-The server MAY support call hierarchy for requirement dependencies:
-- **Incoming calls**: Requirements that depend on this one (`depends` references)
-- **Outgoing calls**: Requirements this one depends on
-
-> r[lsp.callhierarchy.visualization]
-> The call hierarchy MUST show the dependency chain, enabling navigation through requirement relationships.
-
-### Selection Range
-
-r[lsp.selection.smart]
-The server SHOULD support smart selection expansion:
-1. First expansion: select the requirement ID
-2. Second expansion: select the full reference including prefix and brackets
-3. Third expansion: select the entire comment or line
-
-### Linked Editing
-
-r[lsp.linked-editing.req-id]
-The server MAY support linked editing ranges, enabling simultaneous editing of requirement IDs when they appear multiple times in the same file.
-
-### Formatting
-
-r[lsp.format.alignment]
-The server MAY provide formatting for requirement references, aligning multiple references in adjacent lines.
-
-> r[lsp.format.alignment-example]
-> Before:
-> ```rust
-> // r[impl auth.token]
-> // r[impl auth.token.validation.expiry]
-> // r[impl auth.refresh]
-> ```
-> After:
-> ```rust
-> // r[impl auth.token]
-> // r[impl auth.token.validation.expiry]
-> // r[impl auth.refresh]
-> ```
 
 ## Zed Extension
 

@@ -40,16 +40,16 @@ pub struct StatusTool {}
 /// Get rules without implementation references
 #[mcp_tool(
     name = "tracey_uncovered",
-    description = "List rules that have no implementation references ([impl ...] comments). Optionally filter by spec/impl or section."
+    description = "List rules that have no implementation references ([impl ...] comments). Optionally filter by spec/impl or rule ID prefix."
 )]
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct UncoveredTool {
     /// Spec/impl to query (e.g., "my-spec/rust"). Optional if only one exists.
     #[serde(default)]
     pub spec_impl: Option<String>,
-    /// Filter to a specific section
+    /// Filter rules by ID prefix (case-insensitive, e.g., "lsp" matches "lsp.hover", "lsp.diagnostics.*")
     #[serde(default)]
-    pub section: Option<String>,
+    pub prefix: Option<String>,
 }
 
 /// Get rules without verification references
@@ -62,9 +62,9 @@ pub struct UntestedTool {
     /// Spec/impl to query (e.g., "my-spec/rust"). Optional if only one exists.
     #[serde(default)]
     pub spec_impl: Option<String>,
-    /// Filter to a specific section
+    /// Filter rules by ID prefix (case-insensitive, e.g., "lsp" matches "lsp.hover", "lsp.diagnostics.*")
     #[serde(default)]
-    pub section: Option<String>,
+    pub prefix: Option<String>,
 }
 
 /// Get code units without rule references
@@ -290,8 +290,8 @@ impl TraceyHandler {
     }
 
     // r[impl mcp.tool.uncovered]
-    // r[impl mcp.tool.uncovered-section]
-    fn handle_uncovered(&self, spec_impl: Option<&str>, section: Option<&str>) -> String {
+    // r[impl mcp.tool.uncovered-prefix]
+    fn handle_uncovered(&self, spec_impl: Option<&str>, prefix: Option<&str>) -> String {
         let mut out = self.format_header();
 
         let (spec, impl_name) = match self.parse_spec_impl(spec_impl) {
@@ -302,7 +302,7 @@ impl TraceyHandler {
         let data = self.get_data();
         let engine = QueryEngine::new(&data);
 
-        match engine.uncovered(&spec, &impl_name, section) {
+        match engine.uncovered(&spec, &impl_name, prefix) {
             Some(result) => {
                 out.push_str(&result.format_text());
             }
@@ -315,8 +315,8 @@ impl TraceyHandler {
     }
 
     // r[impl mcp.tool.untested]
-    // r[impl mcp.tool.untested-section]
-    fn handle_untested(&self, spec_impl: Option<&str>, section: Option<&str>) -> String {
+    // r[impl mcp.tool.untested-prefix]
+    fn handle_untested(&self, spec_impl: Option<&str>, prefix: Option<&str>) -> String {
         let mut out = self.format_header();
 
         let (spec, impl_name) = match self.parse_spec_impl(spec_impl) {
@@ -327,7 +327,7 @@ impl TraceyHandler {
         let data = self.get_data();
         let engine = QueryEngine::new(&data);
 
-        match engine.untested(&spec, &impl_name, section) {
+        match engine.untested(&spec, &impl_name, prefix) {
             Some(result) => {
                 out.push_str(&result.format_text());
             }
@@ -593,13 +593,13 @@ impl ServerHandler for TraceyHandler {
             "tracey_status" => self.handle_status(),
             "tracey_uncovered" => {
                 let spec_impl = args.get("spec_impl").and_then(|v| v.as_str());
-                let section = args.get("section").and_then(|v| v.as_str());
-                self.handle_uncovered(spec_impl, section)
+                let prefix = args.get("prefix").and_then(|v| v.as_str());
+                self.handle_uncovered(spec_impl, prefix)
             }
             "tracey_untested" => {
                 let spec_impl = args.get("spec_impl").and_then(|v| v.as_str());
-                let section = args.get("section").and_then(|v| v.as_str());
-                self.handle_untested(spec_impl, section)
+                let prefix = args.get("prefix").and_then(|v| v.as_str());
+                self.handle_untested(spec_impl, prefix)
             }
             "tracey_unmapped" => {
                 let spec_impl = args.get("spec_impl").and_then(|v| v.as_str());

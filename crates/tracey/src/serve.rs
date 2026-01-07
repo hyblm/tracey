@@ -462,11 +462,42 @@ fn compute_relative_path(from: &Path, to: &Path) -> String {
     result.display().to_string()
 }
 
+/// File content overlay - maps absolute paths to content
+/// Used by LSP to provide VFS content for open files
+pub type FileOverlay = std::collections::HashMap<PathBuf, String>;
+
+/// Read a file, checking the overlay first, then falling back to disk
+async fn read_file_with_overlay(path: &Path, overlay: &FileOverlay) -> std::io::Result<String> {
+    // Check overlay first (for open files in LSP)
+    if let Some(content) = overlay.get(path) {
+        return Ok(content.clone());
+    }
+    // Try canonicalized path too
+    if let Ok(canonical) = path.canonicalize()
+        && let Some(content) = overlay.get(&canonical)
+    {
+        return Ok(content.clone());
+    }
+    // Fall back to disk (async)
+    tokio::fs::read_to_string(path).await
+}
+
 pub async fn build_dashboard_data(
     project_root: &Path,
     config: &Config,
     version: u64,
     quiet: bool,
+) -> Result<DashboardData> {
+    build_dashboard_data_with_overlay(project_root, config, version, quiet, &FileOverlay::new())
+        .await
+}
+
+pub async fn build_dashboard_data_with_overlay(
+    project_root: &Path,
+    config: &Config,
+    version: u64,
+    quiet: bool,
+    overlay: &FileOverlay,
 ) -> Result<DashboardData> {
     use tracey_core::WalkSources;
 
@@ -715,6 +746,7 @@ pub async fn build_dashboard_data(
                 impl_name,
                 &coverage,
                 &mut impl_specs_content,
+                overlay,
             )
             .await?;
             if let Some(spec_data) = impl_specs_content.remove(spec_name) {
@@ -738,7 +770,7 @@ pub async fn build_dashboard_data(
 
             // Helper to process a file
             // r[impl walk.extensions]
-            let mut process_file = |path: &Path, root: &Path, patterns: &[&String]| {
+            let mut process_file = async |path: &Path, root: &Path, patterns: &[&String]| {
                 if path.extension().is_some_and(is_supported_extension) {
                     let relative = path.strip_prefix(root).unwrap_or(path);
                     let relative_str = relative.to_string_lossy();
@@ -753,7 +785,7 @@ pub async fn build_dashboard_data(
 
                     if included
                         && !excluded
-                        && let Ok(content) = std::fs::read_to_string(path)
+                        && let Ok(content) = read_file_with_overlay(path, overlay).await
                     {
                         // Use canonicalized path as key for consistent lookups
                         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
@@ -777,7 +809,7 @@ pub async fn build_dashboard_data(
                     .build();
 
                 for entry in walker.flatten() {
-                    process_file(entry.path(), project_root, &local_includes);
+                    process_file(entry.path(), project_root, &local_includes).await;
                 }
             }
 
@@ -814,7 +846,7 @@ pub async fn build_dashboard_data(
                 };
 
                 for entry in walker.flatten() {
-                    process_file(entry.path(), &resolved_path, &[&adjusted_pattern]);
+                    process_file(entry.path(), &resolved_path, &[&adjusted_pattern]).await;
                 }
             }
 
@@ -908,6 +940,7 @@ async fn load_spec_content(
     impl_name: &str,
     coverage: &BTreeMap<String, RuleCoverage>,
     specs_content: &mut BTreeMap<String, ApiSpecData>,
+    overlay: &FileOverlay,
 ) -> Result<()> {
     use ignore::WalkBuilder;
 
@@ -956,7 +989,7 @@ async fn load_spec_content(
             continue;
         }
 
-        if let Ok(content) = std::fs::read_to_string(path) {
+        if let Ok(content) = read_file_with_overlay(path, overlay).await {
             // Parse frontmatter to get weight
             let weight = match parse_frontmatter(&content) {
                 Ok((fm, _)) => fm.weight,
