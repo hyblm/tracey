@@ -1058,19 +1058,40 @@ The specification view MUST support keyboard navigation between requirements usi
 > r[dashboard.editing.keyboard.scope]
 > Keyboard shortcuts MUST only be active when not typing in an input field, textarea, or editor to avoid conflicts with normal text entry.
 
+> r[dashboard.editing.keyboard.next-uncovered]
+> Pressing `J` (Shift+j) MUST scroll to and focus the next uncovered requirement in the document, skipping covered and partial requirements. If no uncovered requirement exists after the current position, it MUST wrap to the first uncovered requirement.
+
+> r[dashboard.editing.keyboard.prev-uncovered]
+> Pressing `K` (Shift+k) MUST scroll to and focus the previous uncovered requirement in the document, skipping covered and partial requirements. If no uncovered requirement exists before the current position, it MUST wrap to the last uncovered requirement.
+
+> r[dashboard.editing.keyboard.goto-top]
+> Pressing `gg` (two consecutive `g` keys) MUST scroll to the top of the specification document.
+
+> r[dashboard.editing.keyboard.goto-bottom]
+> Pressing `G` (Shift+g) MUST scroll to the bottom of the specification document.
+
+> r[dashboard.editing.keyboard.search]
+> Pressing `/` MUST open the search modal, allowing the user to search for requirements and content.
+
+> r[dashboard.editing.keyboard.yank-full]
+> Pressing `yy` (two consecutive `y` keys) on a focused requirement MUST copy both the requirement ID and its full markdown text to the clipboard, and display a brief "Copied" notification.
+
+> r[dashboard.editing.keyboard.yank-link]
+> Pressing `yl` on a focused requirement MUST copy only the requirement ID to the clipboard (e.g., `rule.id.here`), and display a brief "Copied" notification.
+
 ### Future: Add Requirement
 
 r[dashboard.editing.add.button status=draft]
 The dashboard SHOULD provide an "Add Requirement" button that inserts a new requirement template at appropriate locations (end of sections, after existing requirements).
 
-r[dashboard.editing.add.template status=draft]
-The template MUST be pre-filled as a blockquote with `r[|]` where `|` represents the cursor position, ready for the user to type the requirement ID.
-
-Example template:
-```markdown
-> r[|]
->
-```
+> r[dashboard.editing.add.template status=draft]
+> The template MUST be pre-filled as a blockquote with `r[|]` where `|` represents the cursor position, ready for the user to type the requirement ID.
+> 
+> Example template:
+> ```markdown
+> > r[|]
+> >
+> ```
 
 r[dashboard.editing.add.cursor-position status=draft]
 The cursor MUST be positioned inside the brackets after `r[` to enable immediate typing of the requirement ID, followed by tab to move to the content line.

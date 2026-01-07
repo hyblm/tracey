@@ -1204,14 +1204,22 @@ a.rule-marker:hover {
     margin-top: 1.5rem;
 }
 
+/* Covered requirements - dim them so uncovered ones stand out */
 .req-container.req-covered {
-    border-color: color-mix(in srgb, var(--green) 50%, var(--border));
+    border-color: var(--border);
+    opacity: 0.5;
+}
+
+.req-container.req-covered:hover {
+    opacity: 0.8;
 }
 
 .req-container.req-covered::before {
     background: var(--green);
+    opacity: 0.5;
 }
 
+/* Partial coverage - moderate emphasis */
 .req-container.req-partial {
     border-color: color-mix(in srgb, var(--yellow) 50%, var(--border));
 }
@@ -1220,8 +1228,14 @@ a.rule-marker:hover {
     background: var(--yellow);
 }
 
+/* Uncovered requirements - make them POP */
 .req-container.req-uncovered {
-    border-color: color-mix(in srgb, var(--neutral) 50%, var(--border));
+    border: 2px dashed var(--accent);
+    background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+}
+
+.req-container.req-uncovered::before {
+    display: none;
 }
 
 /* Keyboard navigation focus indicator (j/k) */
@@ -1229,6 +1243,49 @@ a.rule-marker:hover {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
     box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+/* Copy success feedback (yy/yl) */
+.req-container.req-copy-success {
+    animation: req-copy-flash 0.3s ease-out;
+}
+
+@keyframes req-copy-flash {
+    0% {
+        background: color-mix(in srgb, var(--green) 30%, var(--bg));
+    }
+    100% {
+        background: transparent;
+    }
+}
+
+/* Vim-style pending key indicator */
+.vim-pending-key {
+    position: fixed;
+    bottom: 1rem;
+    right: 1rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 1.25rem;
+    font-weight: 700;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    z-index: 1000;
+    animation: vim-pending-pop 0.1s ease-out;
+}
+
+@keyframes vim-pending-pop {
+    0% {
+        transform: scale(0.8);
+        opacity: 0;
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
 }
 
 .req-badges-left {
@@ -1276,19 +1333,23 @@ a.rule-marker:hover {
     color: var(--accent);
 }
 
+/* Covered - muted badge */
 .req-covered .req-badge.req-id {
-    background: var(--green-dim);
-    color: var(--green);
+    background: color-mix(in srgb, var(--green) 15%, var(--bg));
+    color: color-mix(in srgb, var(--green) 60%, var(--fg-dim));
 }
 
+/* Partial - moderate badge */
 .req-partial .req-badge.req-id {
     background: var(--yellow-dim);
     color: var(--yellow);
 }
 
+/* Uncovered - bright, attention-grabbing badge */
 .req-uncovered .req-badge.req-id {
-    background: var(--neutral-dim);
-    color: var(--neutral);
+    background: var(--accent);
+    color: white;
+    font-weight: 700;
 }
 
 .req-badge.req-impl {
@@ -1348,19 +1409,22 @@ a.rule-marker:hover {
     transition: all 0.15s;
 }
 
+/* Covered - muted copy button */
 .req-covered .req-badge.req-copy {
-    background: var(--green-dim);
-    color: var(--green);
+    background: color-mix(in srgb, var(--green) 15%, var(--bg));
+    color: color-mix(in srgb, var(--green) 60%, var(--fg-dim));
 }
 
+/* Partial - moderate copy button */
 .req-partial .req-badge.req-copy {
     background: var(--yellow-dim);
     color: var(--yellow);
 }
 
+/* Uncovered - bright copy button */
 .req-uncovered .req-badge.req-copy {
-    background: var(--neutral-dim);
-    color: var(--neutral);
+    background: var(--accent);
+    color: white;
 }
 
 .req-badge.req-copy:hover {

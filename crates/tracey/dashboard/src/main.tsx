@@ -675,9 +675,22 @@ function App() {
   );
 
   // Global keyboard shortcut for search
+  // r[impl dashboard.editing.keyboard.search]
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger if typing in input/textarea
+      const target = e.target as HTMLElement;
+      const isTyping =
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable;
+
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+      // "/" opens search (vim-style) when not typing
+      if (e.key === "/" && !isTyping) {
         e.preventDefault();
         setSearchOpen(true);
       }

@@ -262,6 +262,9 @@ export function SpecView({
     byteRange: string;
   } | null>(null);
 
+  // Vim-style pending key indicator (for gg, yy, yl sequences)
+  const [pendingKey, setPendingKey] = useState<string | null>(null);
+
   // Inline editor state
   const editingContainerRef = useRef<{
     element: HTMLElement;
@@ -413,7 +416,29 @@ export function SpecView({
     }
   }, [processedContent, config]);
 
-  // Keyboard navigation: j/k to move between requirements
+  // Custom smooth scroll with controllable duration (shared by j/k and gg/G)
+  const smoothScrollTo = (element: HTMLElement, target: number, duration: number) => {
+    const start = element.scrollTop;
+    const distance = target - start;
+    const startTime = performance.now();
+
+    const animate = (currentTime: number) => {
+      const elapsed = currentTime - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      // Ease out cubic
+      const eased = 1 - Math.pow(1 - progress, 3);
+      element.scrollTop = start + distance * eased;
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      }
+    };
+    requestAnimationFrame(animate);
+  };
+
+  // Keyboard navigation: j/k to move between requirements, J/K (shift) for uncovered only
+  // r[impl dashboard.editing.keyboard.navigation]
+  // r[impl dashboard.editing.keyboard.next-uncovered]
+  // r[impl dashboard.editing.keyboard.prev-uncovered]
   useEffect(() => {
     if (!contentRef.current || !contentBodyRef.current) return;
 
@@ -431,12 +456,21 @@ export function SpecView({
         return;
       }
 
-      if (e.key !== "j" && e.key !== "k" && e.key !== "e") return;
+      if (e.key !== "j" && e.key !== "k" && e.key !== "J" && e.key !== "K" && e.key !== "e") return;
 
+      // Get all requirements, optionally filtered to uncovered only for Shift+J/K
+      const uncoveredOnly = e.shiftKey && (e.key === "J" || e.key === "K");
+      const selector = uncoveredOnly
+        ? ".req-container.req-uncovered[id]"
+        : ".req-container[id]";
       const reqs = Array.from(
-        contentRef.current?.querySelectorAll(".req-container[id]") || []
+        contentRef.current?.querySelectorAll(selector) || []
       ) as HTMLElement[];
-      if (reqs.length === 0) return;
+
+      if (reqs.length === 0) {
+        // No (uncovered) requirements found
+        return;
+      }
 
       // Find current requirement from hash or viewport position
       const hash = window.location.hash.slice(1);
@@ -484,8 +518,10 @@ export function SpecView({
       e.preventDefault();
 
       // Calculate next index with wrapping
+      // j/J = next, k/K = previous
       let nextIndex: number;
-      if (e.key === "j") {
+      const keyLower = e.key.toLowerCase();
+      if (keyLower === "j") {
         // Next requirement, wrap to first
         nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % reqs.length;
       } else {
@@ -502,24 +538,165 @@ export function SpecView({
       // Update hash and scroll
       history.pushState(null, "", `#${reqId}`);
 
-      // Remove focus class from all, add to target
-      for (const req of reqs) {
+      // Remove focus class from ALL requirements (not just filtered list), add to target
+      const allReqs = contentRef.current?.querySelectorAll(".req-container[id]") || [];
+      for (const req of allReqs) {
         req.classList.remove("req-focused");
       }
       targetReq.classList.add("req-focused");
 
       // Scroll to show the requirement at ~1/3 from top of viewport
       const viewportHeight = contentBodyRef.current?.clientHeight || 0;
-      const targetScrollTop = targetReq.offsetTop - viewportHeight / 3;
-      contentBodyRef.current?.scrollTo({
-        top: Math.max(0, targetScrollTop),
-        behavior: "smooth",
-      });
+      const targetScrollTop = Math.max(0, targetReq.offsetTop - viewportHeight / 3);
+      smoothScrollTo(contentBodyRef.current, targetScrollTop, 100);
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [processedContent]);
+
+  // gg/G navigation: gg = top, G = bottom
+  // yy/yl yank: yy = copy ID + text, yl = copy ID only
+  // r[impl dashboard.editing.keyboard.goto-top]
+  // r[impl dashboard.editing.keyboard.goto-bottom]
+  // r[impl dashboard.editing.keyboard.yank-full]
+  // r[impl dashboard.editing.keyboard.yank-link]
+  useEffect(() => {
+    let pendingKeyTimeout: number | null = null;
+
+    const clearPending = () => {
+      setPendingKey(null);
+      if (pendingKeyTimeout) {
+        clearTimeout(pendingKeyTimeout);
+        pendingKeyTimeout = null;
+      }
+    };
+
+    const setPending = (key: string) => {
+      setPendingKey(key);
+      if (pendingKeyTimeout) clearTimeout(pendingKeyTimeout);
+      pendingKeyTimeout = window.setTimeout(() => {
+        setPendingKey(null);
+        pendingKeyTimeout = null;
+      }, 1000);
+    };
+
+    const showCopiedNotification = (element: HTMLElement) => {
+      element.classList.add("req-copy-success");
+      setTimeout(() => element.classList.remove("req-copy-success"), 1000);
+    };
+
+    const getFocusedRequirement = (): HTMLElement | null => {
+      const hash = window.location.hash.slice(1);
+      if (hash) {
+        const el = contentRef.current?.querySelector(`#${CSS.escape(hash)}`);
+        if (el?.classList.contains("req-container")) {
+          return el as HTMLElement;
+        }
+      }
+      return contentRef.current?.querySelector(".req-container.req-focused") as HTMLElement | null;
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Check refs inside handler - they may not be ready at effect registration
+      if (!contentBodyRef.current || !contentRef.current) return;
+
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable ||
+        e.ctrlKey ||
+        e.metaKey ||
+        e.altKey
+      ) {
+        return;
+      }
+
+      // Get current pending key from DOM (state might be stale in closure)
+      const currentPending = document.querySelector(".vim-pending-key")?.textContent || null;
+
+      // G (shift+g) = go to bottom and focus last requirement
+      if (e.key === "G") {
+        e.preventDefault();
+        clearPending();
+        smoothScrollTo(contentBodyRef.current, contentBodyRef.current.scrollHeight, 150);
+        // Focus the last requirement
+        const allReqs = contentRef.current.querySelectorAll(".req-container[id]");
+        const lastReq = allReqs[allReqs.length - 1] as HTMLElement | undefined;
+        if (lastReq) {
+          for (const req of allReqs) req.classList.remove("req-focused");
+          lastReq.classList.add("req-focused");
+          history.replaceState(null, "", `#${lastReq.id}`);
+        }
+        return;
+      }
+
+      // gg = go to top and focus first requirement
+      if (e.key === "g" && !e.shiftKey) {
+        if (currentPending === "g") {
+          e.preventDefault();
+          clearPending();
+          smoothScrollTo(contentBodyRef.current, 0, 150);
+          // Focus the first requirement
+          const allReqs = contentRef.current.querySelectorAll(".req-container[id]");
+          const firstReq = allReqs[0] as HTMLElement | undefined;
+          if (firstReq) {
+            for (const req of allReqs) req.classList.remove("req-focused");
+            firstReq.classList.add("req-focused");
+            history.replaceState(null, "", `#${firstReq.id}`);
+          }
+        } else {
+          e.preventDefault();
+          setPending("g");
+        }
+        return;
+      }
+
+      // yl = yank link (copy requirement ID only)
+      if (e.key === "l" && currentPending === "y") {
+        e.preventDefault();
+        clearPending();
+        const req = getFocusedRequirement();
+        if (req) {
+          const reqId = req.id.replace(/^r-/, "");
+          navigator.clipboard?.writeText(reqId);
+          showCopiedNotification(req);
+        }
+        return;
+      }
+
+      // yy = yank full (copy requirement ID + markdown text)
+      if (e.key === "y" && !e.shiftKey) {
+        if (currentPending === "y") {
+          e.preventDefault();
+          clearPending();
+          const req = getFocusedRequirement();
+          if (req) {
+            const reqId = req.id.replace(/^r-/, "");
+            const contentEl = req.querySelector(".req-content");
+            const text = contentEl?.textContent?.trim() || "";
+            const fullText = `r[${reqId}]\n${text}`;
+            navigator.clipboard?.writeText(fullText);
+            showCopiedNotification(req);
+          }
+        } else {
+          e.preventDefault();
+          setPending("y");
+        }
+        return;
+      }
+
+      // Any other key clears pending
+      clearPending();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      if (pendingKeyTimeout) clearTimeout(pendingKeyTimeout);
+    };
+  }, []);
 
   const scrollToHeading = useCallback((slug: string) => {
     if (!contentRef.current || !contentBodyRef.current) return;
@@ -915,6 +1092,8 @@ export function SpecView({
           setPreviewModal(null);
         }}
       />`}
+      ${pendingKey &&
+      html`<div class="vim-pending-key">${pendingKey}</div>`}
     </div>
   `;
 }

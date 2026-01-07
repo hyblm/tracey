@@ -12,7 +12,7 @@ import { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
-import { vim } from "@replit/codemirror-vim";
+import { vim, Vim } from "@replit/codemirror-vim";
 
 interface InlineEditorProps {
   filePath: string;
@@ -57,9 +57,23 @@ export function InlineEditor({ filePath, byteRange, onSave, onCancel }: InlineEd
     fetchContent();
   }, [filePath, start, end]);
 
+  // Ref for save handler (so vim commands can access current handler)
+  const handleSaveRef = useRef<() => void>(() => {});
+
   // Initialize CodeMirror when content loads
   useEffect(() => {
     if (!loading && !error && editorRef.current && !editorViewRef.current) {
+      // Define vim ex commands for :q (quit) and :wq (write and quit)
+      Vim.defineEx("q", "q", () => {
+        onCancel();
+      });
+      Vim.defineEx("wq", "wq", () => {
+        handleSaveRef.current();
+      });
+      Vim.defineEx("w", "w", () => {
+        handleSaveRef.current();
+      });
+
       const startState = EditorState.create({
         doc: content,
         extensions: [
@@ -155,6 +169,9 @@ export function InlineEditor({ filePath, byteRange, onSave, onCancel }: InlineEd
     }
   };
 
+  // Keep ref updated so vim :wq/:w commands can call handleSave
+  handleSaveRef.current = handleSave;
+
   if (loading) {
     return html`<div class="inline-editor-loading">Loading...</div>`;
   }
@@ -175,10 +192,10 @@ export function InlineEditor({ filePath, byteRange, onSave, onCancel }: InlineEd
       </div>
       <div class="inline-editor-footer">
         <button class="inline-editor-btn inline-editor-cancel" onClick=${onCancel} disabled=${saving}>
-          Cancel (Esc)
+          Cancel (:q)
         </button>
         <button class="inline-editor-btn inline-editor-save" onClick=${handleSave} disabled=${saving}>
-          ${saving ? "Saving..." : "Save"}
+          ${saving ? "Saving..." : "Save (:wq)"}
         </button>
       </div>
     </div>
