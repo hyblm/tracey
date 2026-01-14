@@ -42,7 +42,7 @@ async fn test_mcp_status_tool() {
     use tracey_proto::TraceyDaemon;
 
     let service = create_test_service().await;
-    let status = service.status().await.expect("status() failed");
+    let status = service.status().await;
 
     // Verify we get coverage information
     assert!(!status.impls.is_empty(), "Expected at least one impl");
@@ -75,7 +75,7 @@ async fn test_mcp_uncovered_tool_no_filter() {
         prefix: None,
     };
 
-    let response = service.uncovered(req).await.expect("uncovered() failed");
+    let response = service.uncovered(req).await;
 
     // Should return list of uncovered rules
     assert_eq!(response.spec, "test");
@@ -95,7 +95,7 @@ async fn test_mcp_uncovered_tool_with_prefix() {
         prefix: Some("data".to_string()),
     };
 
-    let response = service.uncovered(req).await.expect("uncovered() failed");
+    let response = service.uncovered(req).await;
 
     // Filtered by prefix - all rules should start with "data."
     for section in &response.by_section {
@@ -122,7 +122,7 @@ async fn test_mcp_uncovered_tool_auto_select() {
         prefix: None,
     };
 
-    let response = service.uncovered(req).await.expect("uncovered() failed");
+    let response = service.uncovered(req).await;
 
     // Should auto-select the only available spec/impl
     assert_eq!(response.spec, "test");
@@ -144,7 +144,7 @@ async fn test_mcp_untested_tool() {
         prefix: None,
     };
 
-    let response = service.untested(req).await.expect("untested() failed");
+    let response = service.untested(req).await;
 
     // Should return rules that have impl but no verify
     assert_eq!(response.spec, "test");
@@ -168,7 +168,7 @@ async fn test_mcp_unmapped_tool() {
         path: None,
     };
 
-    let response = service.unmapped(req).await.expect("unmapped() failed");
+    let response = service.unmapped(req).await;
 
     // Should return file tree with coverage info
     assert_eq!(response.spec, "test");
@@ -187,7 +187,7 @@ async fn test_mcp_unmapped_tool_with_path_filter() {
         path: Some("src".to_string()),
     };
 
-    let response = service.unmapped(req).await.expect("unmapped() failed");
+    let response = service.unmapped(req).await;
 
     // Should filter to only show src/ files
     for entry in &response.entries {
@@ -208,10 +208,7 @@ async fn test_mcp_rule_tool_found() {
     use tracey_proto::TraceyDaemon;
 
     let service = create_test_service().await;
-    let rule = service
-        .rule("auth.login".to_string())
-        .await
-        .expect("rule() failed");
+    let rule = service.rule("auth.login".to_string()).await;
 
     assert!(rule.is_some(), "Expected auth.login rule to exist");
 
@@ -229,10 +226,7 @@ async fn test_mcp_rule_tool_not_found() {
     use tracey_proto::TraceyDaemon;
 
     let service = create_test_service().await;
-    let rule = service
-        .rule("nonexistent.rule.id".to_string())
-        .await
-        .expect("rule() failed");
+    let rule = service.rule("nonexistent.rule.id".to_string()).await;
 
     assert!(rule.is_none(), "Expected nonexistent rule to return None");
 }
@@ -242,10 +236,7 @@ async fn test_mcp_rule_tool_coverage_info() {
     use tracey_proto::TraceyDaemon;
 
     let service = create_test_service().await;
-    let rule = service
-        .rule("auth.login".to_string())
-        .await
-        .expect("rule() failed");
+    let rule = service.rule("auth.login".to_string()).await;
 
     let info = rule.expect("Expected rule to exist");
 
@@ -273,7 +264,7 @@ async fn test_mcp_config_tool() {
     use tracey_proto::TraceyDaemon;
 
     let service = create_test_service().await;
-    let config = service.config().await.expect("config() failed");
+    let config = service.config().await;
 
     // Should return project configuration
     assert!(!config.specs.is_empty(), "Expected at least one spec");
@@ -295,7 +286,7 @@ async fn test_mcp_reload_tool() {
     use tracey_proto::TraceyDaemon;
 
     let service = create_test_service().await;
-    let response = service.reload().await.expect("reload() failed");
+    let response = service.reload().await;
 
     // Should return rebuild info
     assert!(response.version > 0, "Expected version > 0");
@@ -321,7 +312,7 @@ async fn test_mcp_validate_tool() {
         impl_name: Some("rust".to_string()),
     };
 
-    let result = service.validate(req).await.expect("validate() failed");
+    let result = service.validate(req).await;
 
     // Should return validation results
     assert_eq!(result.spec, "test");
@@ -342,7 +333,7 @@ async fn test_mcp_validate_tool_auto_select() {
         impl_name: None,
     };
 
-    let result = service.validate(req).await.expect("validate() failed");
+    let result = service.validate(req).await;
 
     // Should auto-select the only available spec/impl
     assert_eq!(result.spec, "test");
@@ -360,10 +351,7 @@ async fn test_mcp_search() {
     let service = create_test_service().await;
 
     // Search for "auth"
-    let results = service
-        .search("auth".to_string(), 10)
-        .await
-        .expect("search() failed");
+    let results = service.search("auth".to_string(), 10).await;
 
     // Should find rules starting with "auth."
     assert!(!results.is_empty(), "Expected search results for 'auth'");
@@ -390,10 +378,7 @@ async fn test_mcp_search_limit() {
     let service = create_test_service().await;
 
     // Search with limit of 2
-    let results = service
-        .search("".to_string(), 2)
-        .await
-        .expect("search() failed");
+    let results = service.search("".to_string(), 2).await;
 
     // Should respect the limit
     assert!(results.len() <= 2, "Expected at most 2 results");
@@ -410,8 +395,7 @@ async fn test_mcp_forward_data() {
     let service = create_test_service().await;
     let forward = service
         .forward("test".to_string(), "rust".to_string())
-        .await
-        .expect("forward() failed");
+        .await;
 
     assert!(forward.is_some(), "Expected forward data for test/rust");
 
@@ -431,8 +415,7 @@ async fn test_mcp_reverse_data() {
     let service = create_test_service().await;
     let reverse = service
         .reverse("test".to_string(), "rust".to_string())
-        .await
-        .expect("reverse() failed");
+        .await;
 
     assert!(reverse.is_some(), "Expected reverse data for test/rust");
 

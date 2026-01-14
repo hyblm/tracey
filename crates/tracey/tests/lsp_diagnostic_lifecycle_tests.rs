@@ -77,10 +77,7 @@ fn test_func() {}"#;
         content: content.to_string(),
     };
 
-    let diagnostics = service
-        .lsp_diagnostics(req)
-        .await
-        .expect("lsp_diagnostics() failed");
+    let diagnostics = service.lsp_diagnostics(req).await;
 
     assert!(
         !diagnostics.is_empty(),
@@ -111,10 +108,7 @@ fn login_impl() {}"#;
         content: content.to_string(),
     };
 
-    let diagnostics = service
-        .lsp_diagnostics(req)
-        .await
-        .expect("lsp_diagnostics() failed");
+    let diagnostics = service.lsp_diagnostics(req).await;
 
     // Should have no error diagnostics (might have hints for coverage)
     let errors: Vec<_> = diagnostics
@@ -152,8 +146,7 @@ fn broken_func() {}"#;
             test_file.display().to_string(),
             content_with_error.to_string(),
         )
-        .await
-        .expect("vfs_open failed");
+        .await;
 
     // Request diagnostics for this file
     let req = LspDocumentRequest {
@@ -161,10 +154,7 @@ fn broken_func() {}"#;
         content: content_with_error.to_string(),
     };
 
-    let diagnostics = service
-        .lsp_diagnostics(req)
-        .await
-        .expect("lsp_diagnostics() failed");
+    let diagnostics = service.lsp_diagnostics(req).await;
 
     assert!(
         !diagnostics.is_empty(),
@@ -199,18 +189,14 @@ fn login_impl() {}"#;
             test_file.display().to_string(),
             content_with_typo.to_string(),
         )
-        .await
-        .expect("vfs_open failed");
+        .await;
 
     // Verify we have diagnostics
     let req = LspDocumentRequest {
         path: test_file.display().to_string(),
         content: content_with_typo.to_string(),
     };
-    let diagnostics_before = service
-        .lsp_diagnostics(req)
-        .await
-        .expect("lsp_diagnostics() failed");
+    let diagnostics_before = service.lsp_diagnostics(req).await;
 
     assert!(
         !diagnostics_before.is_empty(),
@@ -223,18 +209,14 @@ fn login_impl() {}"#;
 
     service
         .vfs_change(test_file.display().to_string(), content_fixed.to_string())
-        .await
-        .expect("vfs_change failed");
+        .await;
 
     // Step 3: Verify diagnostics are cleared
     let req = LspDocumentRequest {
         path: test_file.display().to_string(),
         content: content_fixed.to_string(),
     };
-    let diagnostics_after = service
-        .lsp_diagnostics(req)
-        .await
-        .expect("lsp_diagnostics() failed");
+    let diagnostics_after = service.lsp_diagnostics(req).await;
 
     // Filter to only error/warning level diagnostics
     let error_diagnostics: Vec<_> = diagnostics_after
@@ -263,14 +245,13 @@ fn broken() {}"#;
 
     service
         .vfs_open(test_file.display().to_string(), broken_v1.to_string())
-        .await
-        .expect("vfs_open failed");
+        .await;
 
     let req = LspDocumentRequest {
         path: test_file.display().to_string(),
         content: broken_v1.to_string(),
     };
-    let diag = service.lsp_diagnostics(req).await.unwrap();
+    let diag = service.lsp_diagnostics(req).await;
     assert!(
         !diag.is_empty(),
         "Cycle 1: Expected diagnostics for broken state"
@@ -282,14 +263,13 @@ fn working() {}"#;
 
     service
         .vfs_change(test_file.display().to_string(), fixed_v1.to_string())
-        .await
-        .expect("vfs_change failed");
+        .await;
 
     let req = LspDocumentRequest {
         path: test_file.display().to_string(),
         content: fixed_v1.to_string(),
     };
-    let diag = service.lsp_diagnostics(req).await.unwrap();
+    let diag = service.lsp_diagnostics(req).await;
     let errors: Vec<_> = diag.iter().filter(|d| d.code == "orphaned").collect();
     assert!(
         errors.is_empty(),
@@ -302,14 +282,13 @@ fn broken_again() {}"#;
 
     service
         .vfs_change(test_file.display().to_string(), broken_v2.to_string())
-        .await
-        .expect("vfs_change failed");
+        .await;
 
     let req = LspDocumentRequest {
         path: test_file.display().to_string(),
         content: broken_v2.to_string(),
     };
-    let diag = service.lsp_diagnostics(req).await.unwrap();
+    let diag = service.lsp_diagnostics(req).await;
     assert!(
         !diag.is_empty(),
         "Cycle 2: Expected diagnostics for broken state"
@@ -321,14 +300,13 @@ fn working_again() {}"#;
 
     service
         .vfs_change(test_file.display().to_string(), fixed_v2.to_string())
-        .await
-        .expect("vfs_change failed");
+        .await;
 
     let req = LspDocumentRequest {
         path: test_file.display().to_string(),
         content: fixed_v2.to_string(),
     };
-    let diag = service.lsp_diagnostics(req).await.unwrap();
+    let diag = service.lsp_diagnostics(req).await;
     let errors: Vec<_> = diag.iter().filter(|d| d.code == "orphaned").collect();
     assert!(
         errors.is_empty(),
@@ -359,14 +337,10 @@ fn broken() {}"#;
     // We'll use vfs_open and immediately close to trigger a rebuild
     service
         .vfs_open(test_file.display().to_string(), content.to_string())
-        .await
-        .expect("vfs_open failed");
+        .await;
 
     // Get workspace diagnostics
-    let workspace_diags = service
-        .lsp_workspace_diagnostics()
-        .await
-        .expect("lsp_workspace_diagnostics() failed");
+    let workspace_diags = service.lsp_workspace_diagnostics().await;
 
     // Find diagnostics for our broken file
     let broken_file_diags = workspace_diags
@@ -399,13 +373,9 @@ fn broken() {}"#;
     std::fs::write(&test_file, broken_content).expect("Failed to write test file");
     service
         .vfs_open(test_file.display().to_string(), broken_content.to_string())
-        .await
-        .expect("vfs_open failed");
+        .await;
 
-    let workspace_diags_before = service
-        .lsp_workspace_diagnostics()
-        .await
-        .expect("lsp_workspace_diagnostics() failed");
+    let workspace_diags_before = service.lsp_workspace_diagnostics().await;
 
     let has_broken_file_before = workspace_diags_before
         .iter()
@@ -423,14 +393,10 @@ fn working() {}"#;
     std::fs::write(&test_file, fixed_content).expect("Failed to write test file");
     service
         .vfs_change(test_file.display().to_string(), fixed_content.to_string())
-        .await
-        .expect("vfs_change failed");
+        .await;
 
     // Step 3: Verify file is no longer in workspace diagnostics
-    let workspace_diags_after = service
-        .lsp_workspace_diagnostics()
-        .await
-        .expect("lsp_workspace_diagnostics() failed");
+    let workspace_diags_after = service.lsp_workspace_diagnostics().await;
 
     let has_broken_file_after = workspace_diags_after
         .iter()
@@ -470,15 +436,14 @@ fn broken() {}"#;
 
     service
         .vfs_open(test_file.display().to_string(), broken_content.to_string())
-        .await
-        .expect("vfs_open failed");
+        .await;
 
     // Simulate LSP publish_diagnostics call
     let req = LspDocumentRequest {
         path: test_file.display().to_string(),
         content: broken_content.to_string(),
     };
-    let diagnostics = service.lsp_diagnostics(req).await.unwrap();
+    let diagnostics = service.lsp_diagnostics(req).await;
 
     if !diagnostics.is_empty() {
         files_with_published_diagnostics.insert(test_file.display().to_string());
@@ -495,8 +460,7 @@ fn working() {}"#;
 
     service
         .vfs_change(test_file.display().to_string(), fixed_content.to_string())
-        .await
-        .expect("vfs_change failed");
+        .await;
 
     // Simulate what SHOULD happen in LSP:
     // For each file in files_with_published_diagnostics, we should call lsp_diagnostics
@@ -505,7 +469,7 @@ fn working() {}"#;
         path: test_file.display().to_string(),
         content: fixed_content.to_string(),
     };
-    let diagnostics = service.lsp_diagnostics(req).await.unwrap();
+    let diagnostics = service.lsp_diagnostics(req).await;
 
     let errors: Vec<_> = diagnostics
         .iter()
@@ -542,31 +506,24 @@ fn broken() {}"#;
     // Open the file
     service
         .vfs_open(test_file.display().to_string(), content.to_string())
-        .await
-        .expect("vfs_open failed");
+        .await;
 
     // Verify we have diagnostics while open
     let req = LspDocumentRequest {
         path: test_file.display().to_string(),
         content: content.to_string(),
     };
-    let diagnostics = service.lsp_diagnostics(req).await.unwrap();
+    let diagnostics = service.lsp_diagnostics(req).await;
     assert!(
         !diagnostics.is_empty(),
         "Expected diagnostics while file is open"
     );
 
     // Close the file - but the file still exists on disk with errors
-    service
-        .vfs_close(test_file.display().to_string())
-        .await
-        .expect("vfs_close failed");
+    service.vfs_close(test_file.display().to_string()).await;
 
     // Workspace diagnostics should still include this file since it has errors on disk
-    let workspace_diags = service
-        .lsp_workspace_diagnostics()
-        .await
-        .expect("lsp_workspace_diagnostics() failed");
+    let workspace_diags = service.lsp_workspace_diagnostics().await;
 
     let has_close_test_file = workspace_diags
         .iter()
@@ -608,10 +565,7 @@ fn third_error() {}"#;
         content: content.to_string(),
     };
 
-    let diagnostics = service
-        .lsp_diagnostics(req)
-        .await
-        .expect("lsp_diagnostics() failed");
+    let diagnostics = service.lsp_diagnostics(req).await;
 
     let orphaned_diagnostics: Vec<_> = diagnostics
         .iter()
@@ -646,14 +600,13 @@ fn second() {}"#;
             test_file.display().to_string(),
             content_with_two_errors.to_string(),
         )
-        .await
-        .expect("vfs_open failed");
+        .await;
 
     let req = LspDocumentRequest {
         path: test_file.display().to_string(),
         content: content_with_two_errors.to_string(),
     };
-    let diagnostics_before = service.lsp_diagnostics(req).await.unwrap();
+    let diagnostics_before = service.lsp_diagnostics(req).await;
     let errors_before: Vec<_> = diagnostics_before
         .iter()
         .filter(|d| d.code == "orphaned")
@@ -672,14 +625,13 @@ fn second() {}"#;
             test_file.display().to_string(),
             content_with_one_error.to_string(),
         )
-        .await
-        .expect("vfs_change failed");
+        .await;
 
     let req = LspDocumentRequest {
         path: test_file.display().to_string(),
         content: content_with_one_error.to_string(),
     };
-    let diagnostics_after = service.lsp_diagnostics(req).await.unwrap();
+    let diagnostics_after = service.lsp_diagnostics(req).await;
     let errors_after: Vec<_> = diagnostics_after
         .iter()
         .filter(|d| d.code == "orphaned")
@@ -708,10 +660,7 @@ fn test_func() {}"#;
         content: content.to_string(),
     };
 
-    let diagnostics = service
-        .lsp_diagnostics(req)
-        .await
-        .expect("lsp_diagnostics() failed");
+    let diagnostics = service.lsp_diagnostics(req).await;
 
     let unknown_prefix = diagnostics.iter().find(|d| d.code == "unknown-prefix");
     assert!(
@@ -758,21 +707,16 @@ fn working() {}"#;
             broken_file.display().to_string(),
             broken_content.to_string(),
         )
-        .await
-        .expect("vfs_open failed");
+        .await;
     service
         .vfs_open(
             working_file.display().to_string(),
             working_content.to_string(),
         )
-        .await
-        .expect("vfs_open failed");
+        .await;
 
     // Simulate initial publish_workspace_diagnostics
-    let workspace_diags = service
-        .lsp_workspace_diagnostics()
-        .await
-        .expect("lsp_workspace_diagnostics() failed");
+    let workspace_diags = service.lsp_workspace_diagnostics().await;
 
     // Track which files got diagnostics
     for file_diag in &workspace_diags {
@@ -796,15 +740,11 @@ fn now_working() {}"#;
     std::fs::write(&broken_file, fixed_content).expect("Failed to write fixed file");
     service
         .vfs_change(broken_file.display().to_string(), fixed_content.to_string())
-        .await
-        .expect("vfs_change failed");
+        .await;
 
     // Simulate what SHOULD happen in publish_workspace_diagnostics:
     // Get fresh workspace diagnostics
-    let workspace_diags_after = service
-        .lsp_workspace_diagnostics()
-        .await
-        .expect("lsp_workspace_diagnostics() failed");
+    let workspace_diags_after = service.lsp_workspace_diagnostics().await;
 
     // The key insight: workspace_diagnostics only returns files WITH issues
     // It does NOT return the now-fixed file
@@ -843,7 +783,7 @@ fn now_working() {}"#;
                 path: broken_file.display().to_string(),
                 content: fixed_content.to_string(),
             };
-            let diagnostics = service.lsp_diagnostics(req).await.unwrap();
+            let diagnostics = service.lsp_diagnostics(req).await;
             let errors: Vec<_> = diagnostics
                 .iter()
                 .filter(|d| d.code == "orphaned")

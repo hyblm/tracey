@@ -314,18 +314,9 @@ impl ApiError {
     }
 }
 
-/// Flatten double-Result from roam RPC calls into a simpler Result<T, Response>
-fn rpc<T>(
-    res: Result<
-        Result<T, roam::session::RoamError<roam::session::Never>>,
-        roam_stream::ConnectError,
-    >,
-) -> Result<T, Response> {
-    match res {
-        Ok(Ok(v)) => Ok(v),
-        Ok(Err(e)) => Err(ApiError::rpc_error(format!("{:?}", e))),
-        Err(e) => Err(ApiError::rpc_error(e)),
-    }
+/// Convert roam RPC result to Result<T, Response>
+fn rpc<T, E: std::fmt::Debug>(res: Result<T, roam_stream::CallError<E>>) -> Result<T, Response> {
+    res.map_err(|e| ApiError::rpc_error(format!("{:?}", e)))
 }
 
 /// GET /api/config - Get configuration.
@@ -613,7 +604,7 @@ async fn handle_ws_client(socket: ws::WebSocket, state: Arc<AppState>) {
     // Send initial version
     {
         let client = state.client.lock().await;
-        if let Ok(Ok(version)) = client.version().await {
+        if let Ok(version) = client.version().await {
             let msg = WsMessage {
                 msg_type: "version".to_string(),
                 version,
@@ -663,7 +654,7 @@ async fn version_poller(state: Arc<AppState>) {
 
         let version = {
             let client = state.client.lock().await;
-            client.version().await.ok().and_then(|r| r.ok())
+            client.version().await.ok()
         };
 
         if let Some(v) = version {

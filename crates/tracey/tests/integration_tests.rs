@@ -45,7 +45,7 @@ async fn test_status_returns_coverage() {
     use tracey_proto::TraceyDaemon;
 
     let service = create_test_service().await;
-    let status = service.status().await.expect("status() failed");
+    let status = service.status().await;
 
     // We should have at least one impl
     assert!(!status.impls.is_empty(), "Expected at least one impl");
@@ -66,7 +66,7 @@ async fn test_status_coverage_percentages() {
     use tracey_proto::TraceyDaemon;
 
     let service = create_test_service().await;
-    let status = service.status().await.expect("status() failed");
+    let status = service.status().await;
 
     for impl_status in &status.impls {
         // Covered rules should not exceed total
@@ -102,7 +102,7 @@ async fn test_uncovered_returns_rules() {
         prefix: None,
     };
 
-    let response = service.uncovered(req).await.expect("uncovered() failed");
+    let response = service.uncovered(req).await;
 
     assert_eq!(response.spec, "test");
     assert_eq!(response.impl_name, "rust");
@@ -124,7 +124,7 @@ async fn test_uncovered_with_prefix_filter() {
         prefix: Some("auth".to_string()),
     };
 
-    let response = service.uncovered(req).await.expect("uncovered() failed");
+    let response = service.uncovered(req).await;
 
     // All returned rules should start with "auth."
     for section in &response.by_section {
@@ -149,7 +149,7 @@ async fn test_untested_returns_rules() {
         prefix: None,
     };
 
-    let response = service.untested(req).await.expect("untested() failed");
+    let response = service.untested(req).await;
 
     assert_eq!(response.spec, "test");
     assert_eq!(response.impl_name, "rust");
@@ -166,10 +166,7 @@ async fn test_rule_returns_details() {
     use tracey_proto::TraceyDaemon;
 
     let service = create_test_service().await;
-    let rule = service
-        .rule("auth.login".to_string())
-        .await
-        .expect("rule() failed");
+    let rule = service.rule("auth.login".to_string()).await;
 
     assert!(rule.is_some(), "Expected auth.login rule to exist");
 
@@ -187,10 +184,7 @@ async fn test_rule_not_found() {
     use tracey_proto::TraceyDaemon;
 
     let service = create_test_service().await;
-    let rule = service
-        .rule("nonexistent.rule".to_string())
-        .await
-        .expect("rule() failed");
+    let rule = service.rule("nonexistent.rule".to_string()).await;
 
     assert!(rule.is_none(), "Expected nonexistent rule to return None");
 }
@@ -204,7 +198,7 @@ async fn test_config_returns_project_info() {
     use tracey_proto::TraceyDaemon;
 
     let service = create_test_service().await;
-    let config = service.config().await.expect("config() failed");
+    let config = service.config().await;
 
     assert!(!config.specs.is_empty(), "Expected at least one spec");
 
@@ -240,7 +234,7 @@ fn test_func() {}"#;
         character: 12, // Position within "auth.login"
     };
 
-    let hover = service.lsp_hover(req).await.expect("lsp_hover() failed");
+    let hover = service.lsp_hover(req).await;
 
     assert!(hover.is_some(), "Expected hover info for auth.login");
 
@@ -265,7 +259,7 @@ fn test_func() {}"#;
         character: 5, // Position in "fn"
     };
 
-    let hover = service.lsp_hover(req).await.expect("lsp_hover() failed");
+    let hover = service.lsp_hover(req).await;
 
     assert!(hover.is_none(), "Expected no hover info outside reference");
 }
@@ -286,10 +280,7 @@ fn test_func() {}"#;
         character: 12,
     };
 
-    let locations = service
-        .lsp_definition(req)
-        .await
-        .expect("lsp_definition() failed");
+    let locations = service.lsp_definition(req).await;
 
     assert!(
         !locations.is_empty(),
@@ -319,10 +310,7 @@ async fn test_lsp_completions() {
         character: 15, // After "auth"
     };
 
-    let completions = service
-        .lsp_completions(req)
-        .await
-        .expect("lsp_completions() failed");
+    let completions = service.lsp_completions(req).await;
 
     // Should have some auth.* completions
     let auth_completions: Vec<_> = completions
@@ -352,10 +340,7 @@ fn test_func() {}"#;
         content: content.to_string(),
     };
 
-    let diagnostics = service
-        .lsp_diagnostics(req)
-        .await
-        .expect("lsp_diagnostics() failed");
+    let diagnostics = service.lsp_diagnostics(req).await;
 
     // Should have a diagnostic for the orphaned reference
     let orphaned = diagnostics.iter().find(|d| d.code == "orphaned");
@@ -383,10 +368,7 @@ fn test_login() {}"#;
         content: content.to_string(),
     };
 
-    let symbols = service
-        .lsp_document_symbols(req)
-        .await
-        .expect("lsp_document_symbols() failed");
+    let symbols = service.lsp_document_symbols(req).await;
 
     // Should have symbols for each reference
     assert!(symbols.len() >= 3, "Expected at least 3 symbols");
@@ -406,10 +388,7 @@ async fn test_lsp_workspace_symbols() {
 
     let service = create_test_service().await;
 
-    let symbols = service
-        .lsp_workspace_symbols("auth".to_string())
-        .await
-        .expect("lsp_workspace_symbols() failed");
+    let symbols = service.lsp_workspace_symbols("auth".to_string()).await;
 
     // Should have auth.* symbols
     assert!(!symbols.is_empty(), "Expected auth.* symbols");
@@ -440,10 +419,7 @@ fn login() {}"#;
         include_declaration: true,
     };
 
-    let references = service
-        .lsp_references(req)
-        .await
-        .expect("lsp_references() failed");
+    let references = service.lsp_references(req).await;
 
     // Should have at least the definition and one impl reference
     assert!(!references.is_empty(), "Expected references for auth.login");
@@ -463,7 +439,7 @@ async fn test_validate_returns_results() {
         impl_name: Some("rust".to_string()),
     };
 
-    let result = service.validate(req).await.expect("validate() failed");
+    let result = service.validate(req).await;
 
     assert_eq!(result.spec, "test");
     assert_eq!(result.impl_name, "rust");
@@ -492,10 +468,7 @@ fn test_login() {}"#;
         content: content.to_string(),
     };
 
-    let tokens = service
-        .lsp_semantic_tokens(req)
-        .await
-        .expect("lsp_semantic_tokens() failed");
+    let tokens = service.lsp_semantic_tokens(req).await;
 
     // Should have tokens for each reference
     assert!(!tokens.is_empty(), "Expected semantic tokens");
@@ -525,10 +498,7 @@ pub fn login() {}"#;
         content: content.to_string(),
     };
 
-    let lenses = service
-        .lsp_code_lens(req)
-        .await
-        .expect("lsp_code_lens() failed");
+    let lenses = service.lsp_code_lens(req).await;
 
     // Should have a code lens for the auth.login definition
     assert!(
@@ -556,7 +526,7 @@ async fn test_validate_ignores_other_spec_prefixes() {
         impl_name: Some("rust".to_string()),
     };
 
-    let result = service.validate(req).await.expect("validate() failed");
+    let result = service.validate(req).await;
 
     // Should not have any UnknownRequirement errors for o[impl api.fetch]
     // because that reference belongs to the "other" spec, not "test"
@@ -588,7 +558,7 @@ async fn test_validate_other_spec_validates_its_own_prefix() {
         impl_name: Some("rust".to_string()),
     };
 
-    let result = service.validate(req).await.expect("validate() failed");
+    let result = service.validate(req).await;
 
     // Should not have UnknownRequirement errors for o[impl api.fetch]
     // because api.fetch exists in the other spec
@@ -621,7 +591,7 @@ async fn test_validate_other_spec_ignores_r_prefix() {
         impl_name: Some("rust".to_string()),
     };
 
-    let result = service.validate(req).await.expect("validate() failed");
+    let result = service.validate(req).await;
 
     // Should not have UnknownRequirement errors for r[impl auth.login]
     // because that reference belongs to the "test" spec, not "other"
@@ -660,10 +630,7 @@ fn test_func() {}"#;
         content: content.to_string(),
     };
 
-    let diagnostics = service
-        .lsp_diagnostics(req)
-        .await
-        .expect("lsp_diagnostics() failed");
+    let diagnostics = service.lsp_diagnostics(req).await;
 
     // Should have a diagnostic for the orphaned reference
     let orphaned = diagnostics.iter().find(|d| d.code == "orphaned");

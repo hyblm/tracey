@@ -27,15 +27,9 @@ use tokio::sync::Mutex;
 use crate::daemon::{DaemonClient, new_client};
 use tracey_proto::*;
 
-/// Flatten double-Result from roam RPC calls into Result<T, String>
-fn rpc<T, E: std::fmt::Debug>(
-    res: Result<Result<T, roam::session::RoamError<E>>, roam_stream::ConnectError>,
-) -> Result<T, String> {
-    match res {
-        Ok(Ok(v)) => Ok(v),
-        Ok(Err(e)) => Err(format!("RPC error: {:?}", e)),
-        Err(e) => Err(format!("Connection error: {}", e)),
-    }
+/// Convert roam RPC result to a simple Result
+fn rpc<T, E: std::fmt::Debug>(res: Result<T, roam_stream::CallError<E>>) -> Result<T, String> {
+    res.map_err(|e| format!("RPC error: {:?}", e))
 }
 
 /// Format config error as a warning banner to prepend to responses
