@@ -161,9 +161,19 @@ fn build_dashboard() {
                 "\n\
                 pnpm is required but not found!\n\
                 \n\
-                Install pnpm using Corepack (recommended, included with Node.js):\n\
+                Install pnpm using one of the following methods:\n\
                 \n\
-                  corepack enable pnpm\n\
+                  # Using npm (recommended):\n\
+                  npm install -g pnpm\n\
+                \n\
+                  # Using Chocolatey:\n\
+                  choco install pnpm\n\
+                \n\
+                  # Using winget:\n\
+                  winget install -e --id pnpm.pnpm\n\
+                \n\
+                  # Using Scoop:\n\
+                  scoop install pnpm\n\
                 \n\
                   # Verify installation:\n\
                   pnpm -v\n\
