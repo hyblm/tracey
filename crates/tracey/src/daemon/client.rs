@@ -48,7 +48,7 @@ impl DaemonConnector {
     /// Spawn the daemon process in the background.
     fn spawn_daemon(&self) -> io::Result<()> {
         // Find the tracey executable
-        let exe = std::env::current_exe().map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let exe = std::env::current_exe().map_err(io::Error::other)?;
 
         // Determine config path
         let config_path = self.project_root.join(".config/tracey/config.yaml");
@@ -71,9 +71,8 @@ impl DaemonConnector {
             cmd.process_group(0);
         }
 
-        cmd.spawn().map_err(|e| {
-            io::Error::new(io::ErrorKind::Other, format!("Failed to spawn daemon: {e}"))
-        })?;
+        cmd.spawn()
+            .map_err(|e| io::Error::other(format!("Failed to spawn daemon: {e}")))?;
 
         Ok(())
     }

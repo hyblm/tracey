@@ -535,9 +535,7 @@ impl TraceyDaemon for TraceyService {
         let impl_key = (req.spec, req.impl_name);
 
         // Get the code units map for this impl
-        let Some(code_units_by_file) = data.code_units_by_impl.get(&impl_key) else {
-            return None;
-        };
+        let code_units_by_file = data.code_units_by_impl.get(&impl_key)?;
 
         // Resolve the file path - it may be relative or absolute
         let file_path = PathBuf::from(&req.path);
@@ -550,9 +548,7 @@ impl TraceyDaemon for TraceyService {
         let full_path = full_path.canonicalize().unwrap_or(full_path);
 
         // Look up code units for this file
-        let Some(units) = code_units_by_file.get(&full_path) else {
-            return None;
-        };
+        let units = code_units_by_file.get(&full_path)?;
 
         // Read file content
         let content = match std::fs::read_to_string(&full_path) {
@@ -910,16 +906,11 @@ impl TraceyDaemon for TraceyService {
         let path = PathBuf::from(&req.path);
 
         // Find the rule at cursor position (works for both spec and source files)
-        let Some(rule_at_pos) =
-            find_rule_at_position(&path, &req.content, req.line, req.character).await
-        else {
-            return None;
-        };
+        let rule_at_pos =
+            find_rule_at_position(&path, &req.content, req.line, req.character).await?;
 
         // Look up the rule in our data
-        let Some((spec_name, rule)) = find_rule_in_data(&data, &rule_at_pos.req_id) else {
-            return None;
-        };
+        let (spec_name, rule) = find_rule_in_data(&data, &rule_at_pos.req_id)?;
 
         // Get spec info for the prefix
         let spec_info = data.config.specs.iter().find(|s| &s.name == spec_name);
@@ -1712,16 +1703,11 @@ impl TraceyDaemon for TraceyService {
         let path = PathBuf::from(&req.path);
 
         // Find the rule at cursor position (works for both spec and source files)
-        let Some(rule_at_pos) =
-            find_rule_at_position(&path, &req.content, req.line, req.character).await
-        else {
-            return None;
-        };
+        let rule_at_pos =
+            find_rule_at_position(&path, &req.content, req.line, req.character).await?;
 
         // Check if the rule exists
-        if find_rule_in_data(&data, &rule_at_pos.req_id).is_none() {
-            return None;
-        }
+        find_rule_in_data(&data, &rule_at_pos.req_id)?;
 
         // Calculate the range of just the rule ID within the reference
         // This is a simplification - we return the whole reference range

@@ -22,6 +22,7 @@ pub struct SpecConfig {
     /// r[impl config.spec.name]
     pub name: String,
 
+    /// @tracey:ignore-next-line
     /// Prefix used to identify this spec in annotations (e.g., "r" for r[req.id])
     /// r[impl config.spec.prefix]
     /// r[impl config.multi-spec.prefix-namespace]

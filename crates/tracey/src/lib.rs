@@ -57,8 +57,44 @@ pub async fn load_rules_from_glob(
     let mut rules: Vec<ExtractedRule> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
 
+    // Handle external paths (patterns starting with ..)
+    // For these, we resolve the walk root and adjust the pattern
+    let (walk_root, effective_pattern, is_external) = if pattern.starts_with("..") {
+        // Find the directory prefix before any glob metacharacters
+        let mut prefix_parts = Vec::new();
+        let mut remaining_parts = Vec::new();
+        let mut found_glob = false;
+
+        for part in pattern.split('/') {
+            if found_glob || part.contains('*') || part.contains('?') || part.contains('[') {
+                found_glob = true;
+                remaining_parts.push(part);
+            } else {
+                prefix_parts.push(part);
+            }
+        }
+
+        let prefix = prefix_parts.join("/");
+        let resolved_root = root.join(&prefix).canonicalize().wrap_err_with(|| {
+            format!(
+                "External spec path '{}' does not exist (resolved from '{}')",
+                prefix, pattern
+            )
+        })?;
+
+        let effective = if remaining_parts.is_empty() {
+            "**/*.md".to_string()
+        } else {
+            remaining_parts.join("/")
+        };
+
+        (resolved_root, effective, true)
+    } else {
+        (root.to_path_buf(), pattern.to_string(), false)
+    };
+
     // Walk the directory tree
-    let walker = WalkBuilder::new(root)
+    let walker = WalkBuilder::new(&walk_root)
         .follow_links(true)
         .hidden(false)
         .git_ignore(true)
@@ -74,10 +110,20 @@ pub async fn load_rules_from_glob(
         }
 
         // Check if the path matches the glob pattern
-        let relative = path.strip_prefix(root).unwrap_or(path);
+        let relative = path.strip_prefix(&walk_root).unwrap_or(path);
         let relative_str = relative.to_string_lossy().to_string();
 
-        if !matches_glob(&relative_str, pattern) {
+        // For display purposes, show the original pattern prefix for external paths
+        let display_path = if is_external {
+            // Reconstruct the path with the original prefix for display
+            let prefix_end = pattern.find('*').unwrap_or(pattern.len());
+            let prefix = &pattern[..prefix_end].trim_end_matches('/');
+            format!("{}/{}", prefix, relative_str)
+        } else {
+            relative_str.clone()
+        };
+
+        if !matches_glob(&relative_str, &effective_pattern) {
             continue;
         }
 
@@ -95,7 +141,7 @@ pub async fn load_rules_from_glob(
                     "   {} {} requirements from {}",
                     "Found".green(),
                     doc.reqs.len(),
-                    relative_str
+                    display_path
                 );
             }
 
@@ -107,7 +153,7 @@ pub async fn load_rules_from_glob(
                     eyre::bail!(
                         "Duplicate requirement '{}' found in {}",
                         req.id.red(),
-                        relative_str
+                        display_path
                     );
                 }
                 seen_ids.insert(req.id.clone());
@@ -142,7 +188,7 @@ pub async fn load_rules_from_glob(
                     rule_sections.remove(&req.id).unwrap_or((None, None));
                 rules.push(ExtractedRule {
                     def: req,
-                    source_file: relative_str.clone(),
+                    source_file: display_path.clone(),
                     column,
                     section,
                     section_title,

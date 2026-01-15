@@ -132,6 +132,7 @@ impl TraceyRuleHandler {
     }
 }
 
+/// @tracey:ignore-next-line
 /// Custom inline code handler that transforms `r[rule.id]` into clickable links.
 struct TraceyInlineCodeHandler {
     /// Spec name for URL generation
@@ -153,6 +154,7 @@ impl InlineCodeHandler for TraceyInlineCodeHandler {
     fn render(&self, code: &str) -> Option<String> {
         let code = code.trim();
 
+        // @tracey:ignore-next-line
         // Match r[rule.id] pattern
         if !code.starts_with("r[") || !code.ends_with(']') {
             return None;
