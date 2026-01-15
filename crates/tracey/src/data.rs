@@ -1132,7 +1132,12 @@ fn build_outline(
 }
 
 /// Simple glob pattern matching
+///
+/// Normalizes path separators to forward slashes for cross-platform compatibility.
 pub fn glob_match(path: &str, pattern: &str) -> bool {
+    // Normalize Windows backslashes to forward slashes
+    let path = path.replace('\\', "/");
+
     if pattern == "**/*.rs" || pattern == "**/*.md" {
         let ext = pattern.rsplit('.').next().unwrap_or("");
         return path.ends_with(&format!(".{}", ext));
