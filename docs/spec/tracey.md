@@ -267,25 +267,25 @@ Tracey supports directives to suppress reference extraction in specific location
 r[ref.ignore.prefix]
 Ignore directives MUST be prefixed with `@tracey:` to distinguish them from regular comments.
 
-r[ref.ignore.next-line]
-The `@tracey:ignore-next-line` directive MUST cause tracey to skip reference extraction on the immediately following line.
+> r[ref.ignore.next-line]
+> The `@tracey:ignore-next-line` directive MUST cause tracey to skip reference extraction on the immediately following line.
+>
+> ```rust
+> // @tracey:ignore-next-line
+> // This comment mentions r[impl auth.login] but it won't be extracted
+> fn example() {}
+> ```
 
-```rust
-// @tracey:ignore-next-line
-// This comment mentions r[impl auth.login] but it won't be extracted
-fn example() {}
-```
-
-r[ref.ignore.block]
-The `@tracey:ignore-start` and `@tracey:ignore-end` directives MUST cause tracey to skip reference extraction for all lines between them (inclusive).
-
-```rust
-// @tracey:ignore-start
-// The fixtures have both r[impl auth.login] and o[impl api.fetch]
-// These are just documentation, not actual references
-// @tracey:ignore-end
-fn test_validation() {}
-```
+> r[ref.ignore.block]
+> The `@tracey:ignore-start` and `@tracey:ignore-end` directives MUST cause tracey to skip reference extraction for all lines between them (inclusive).
+>
+> ```rust
+> // @tracey:ignore-start
+> // The fixtures have both r[impl auth.login] and o[impl api.fetch]
+> // These are just documentation, not actual references
+> // @tracey:ignore-end
+> fn test_validation() {}
+> ```
 
 > r[ref.ignore.block-nesting]
 > Ignore blocks MUST NOT nest. A second `@tracey:ignore-start` before an `@tracey:ignore-end` SHOULD be treated as an error or ignored.
