@@ -98,6 +98,20 @@ enum Command {
         #[facet(args::named, args::short = 'n', default)]
         lines: Option<usize>,
     },
+
+    /// Show daemon status
+    Status {
+        /// Project root directory (default: current directory)
+        #[facet(args::positional, default)]
+        root: Option<PathBuf>,
+    },
+
+    /// Stop the running daemon
+    Kill {
+        /// Project root directory (default: current directory)
+        #[facet(args::positional, default)]
+        root: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -199,6 +213,16 @@ fn main() -> Result<()> {
             follow,
             lines,
         }) => show_logs(root, follow, lines.unwrap_or(50)),
+        // r[impl daemon.cli.status]
+        Some(Command::Status { root }) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(show_status(root))
+        }
+        // r[impl daemon.cli.kill]
+        Some(Command::Kill { root }) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(kill_daemon(root))
+        }
         // r[impl cli.no-args]
         None => {
             print_help();
@@ -220,6 +244,8 @@ fn print_help() {
     {lsp}       Start the LSP server for editor integration
     {daemon}    Start the tracey daemon (persistent server)
     {logs}      Show daemon logs
+    {status}    Show daemon status
+    {kill}      Stop the running daemon
 
 {options}:
     -h, --help      Show this help message
@@ -232,6 +258,8 @@ Run 'tracey <COMMAND> --help' for more information on a command."#,
         lsp = "lsp".cyan(),
         daemon = "daemon".cyan(),
         logs = "logs".cyan(),
+        status = "status".cyan(),
+        kill = "kill".cyan(),
         options = "Options".bold(),
     );
 }
@@ -302,6 +330,172 @@ fn show_logs(root: Option<PathBuf>, follow: bool, lines: usize) -> Result<()> {
                     break;
                 }
             }
+        }
+    }
+
+    Ok(())
+}
+
+/// r[impl daemon.cli.status]
+/// Show daemon status by connecting and calling health()
+async fn show_status(root: Option<PathBuf>) -> Result<()> {
+    let project_root = match root {
+        Some(r) => r,
+        None => find_project_root()?,
+    };
+
+    let endpoint = daemon::local_endpoint(&project_root);
+
+    // Check if endpoint exists
+    if !roam_local::endpoint_exists(&endpoint) {
+        println!("{}: No daemon running", "Status".yellow());
+        #[cfg(unix)]
+        println!("  Socket: {} (not found)", endpoint.display());
+        #[cfg(windows)]
+        println!("  Endpoint: {} (not found)", endpoint);
+        return Ok(());
+    }
+
+    // Try to connect without auto-starting
+    match roam_local::connect(&endpoint).await {
+        Ok(stream) => {
+            // Create a minimal client to call health()
+            use roam_stream::{Connector, HandshakeConfig, NoDispatcher, connect};
+
+            struct DirectConnector {
+                stream: std::sync::Mutex<Option<roam_local::LocalStream>>,
+            }
+
+            impl Connector for DirectConnector {
+                type Transport = roam_local::LocalStream;
+                async fn connect(&self) -> std::io::Result<Self::Transport> {
+                    self.stream
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .ok_or_else(|| std::io::Error::other("already connected"))
+                }
+            }
+
+            let connector = DirectConnector {
+                stream: std::sync::Mutex::new(Some(stream)),
+            };
+            let client = connect(connector, HandshakeConfig::default(), NoDispatcher);
+            let client = tracey_proto::TraceyDaemonClient::new(client);
+
+            match client.health().await {
+                Ok(health) => {
+                    println!("{}: Daemon is running", "Status".green());
+                    println!("  Uptime: {}s", health.uptime_secs);
+                    println!("  Data version: {}", health.version);
+                    println!(
+                        "  Watcher: {}",
+                        if health.watcher_active {
+                            "active".green().to_string()
+                        } else {
+                            "inactive".yellow().to_string()
+                        }
+                    );
+                    if let Some(err) = &health.watcher_error {
+                        println!("  Watcher error: {}", err.as_str().red());
+                    }
+                    if let Some(err) = &health.config_error {
+                        println!("  Config error: {}", err.as_str().red());
+                    }
+                    println!("  File events: {}", health.watcher_event_count);
+                    println!("  Watched dirs: {}", health.watched_directories.len());
+                }
+                Err(e) => {
+                    println!("{}: Daemon connection failed", "Status".red());
+                    println!("  Error: {}", e);
+                }
+            }
+        }
+        Err(_) => {
+            println!("{}: Daemon not responding", "Status".yellow());
+            #[cfg(unix)]
+            println!(
+                "  Socket exists at {} but cannot connect",
+                endpoint.display()
+            );
+            #[cfg(windows)]
+            println!("  Endpoint exists but cannot connect");
+            println!("  The daemon may have crashed. Run 'tracey kill' to clean up.");
+        }
+    }
+
+    Ok(())
+}
+
+/// r[impl daemon.cli.kill]
+/// Kill the running daemon by sending a shutdown request
+async fn kill_daemon(root: Option<PathBuf>) -> Result<()> {
+    let project_root = match root {
+        Some(r) => r,
+        None => find_project_root()?,
+    };
+
+    let endpoint = daemon::local_endpoint(&project_root);
+
+    // Check if endpoint exists
+    if !roam_local::endpoint_exists(&endpoint) {
+        println!("{}: No daemon running", "Info".cyan());
+        return Ok(());
+    }
+
+    // Try to connect and send shutdown
+    match roam_local::connect(&endpoint).await {
+        Ok(stream) => {
+            use roam_stream::{Connector, HandshakeConfig, NoDispatcher, connect};
+
+            struct DirectConnector {
+                stream: std::sync::Mutex<Option<roam_local::LocalStream>>,
+            }
+
+            impl Connector for DirectConnector {
+                type Transport = roam_local::LocalStream;
+                async fn connect(&self) -> std::io::Result<Self::Transport> {
+                    self.stream
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .ok_or_else(|| std::io::Error::other("already connected"))
+                }
+            }
+
+            let connector = DirectConnector {
+                stream: std::sync::Mutex::new(Some(stream)),
+            };
+            let client = connect(connector, HandshakeConfig::default(), NoDispatcher);
+            let client = tracey_proto::TraceyDaemonClient::new(client);
+
+            match client.shutdown().await {
+                Ok(()) => {
+                    println!("{}: Shutdown signal sent", "Success".green());
+                }
+                Err(e) => {
+                    // Connection may close before we get a response, that's OK
+                    let err_str = e.to_string();
+                    if err_str.contains("closed") {
+                        println!("{}: Daemon stopped", "Success".green());
+                    } else {
+                        println!(
+                            "{}: Error sending shutdown: {}",
+                            "Warning".yellow(),
+                            err_str
+                        );
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            // Socket exists but can't connect - clean it up
+            println!(
+                "{}: Daemon not responding, cleaning up stale socket",
+                "Info".cyan()
+            );
+            let _ = roam_local::remove_endpoint(&endpoint);
+            println!("{}: Cleaned up", "Success".green());
         }
     }
 

@@ -24,6 +24,8 @@ struct TraceyServiceInner {
     watcher_state: Option<Arc<WatcherState>>,
     /// Start time for uptime calculation
     start_time: Instant,
+    /// Shutdown signal sender
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
 }
 
 /// Service implementation wrapping the Engine.
@@ -37,26 +39,35 @@ pub struct TraceyService {
 impl TraceyService {
     /// Create a new service wrapping the given engine.
     pub fn new(engine: Arc<Engine>) -> Self {
+        let (shutdown_tx, _) = tokio::sync::watch::channel(false);
         Self {
             inner: Arc::new(TraceyServiceInner {
                 engine,
                 highlighter: Mutex::new(arborium::Highlighter::new()),
                 watcher_state: None,
                 start_time: Instant::now(),
+                shutdown_tx,
             }),
         }
     }
 
     /// Create a new service with watcher state for health monitoring.
-    pub fn new_with_watcher(engine: Arc<Engine>, watcher_state: Arc<WatcherState>) -> Self {
-        Self {
+    /// Returns the service and a shutdown receiver that signals when shutdown is requested.
+    pub fn new_with_watcher(
+        engine: Arc<Engine>,
+        watcher_state: Arc<WatcherState>,
+    ) -> (Self, tokio::sync::watch::Receiver<bool>) {
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let service = Self {
             inner: Arc::new(TraceyServiceInner {
                 engine,
                 highlighter: Mutex::new(arborium::Highlighter::new()),
                 watcher_state: Some(watcher_state),
                 start_time: Instant::now(),
+                shutdown_tx,
             }),
-        }
+        };
+        (service, shutdown_rx)
     }
 
     /// Set the watcher state (for lazy initialization).
@@ -458,6 +469,12 @@ impl TraceyDaemon for TraceyService {
             watched_directories,
             uptime_secs,
         }
+    }
+
+    /// Request the daemon to shut down gracefully
+    async fn shutdown(&self) {
+        tracing::info!("Shutdown requested via RPC");
+        let _ = self.inner.shutdown_tx.send(true);
     }
 
     /// Subscribe to data updates

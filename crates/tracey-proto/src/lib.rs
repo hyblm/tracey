@@ -625,6 +625,9 @@ pub trait TraceyDaemon {
     /// Get daemon health status
     async fn health(&self) -> HealthResponse;
 
+    /// Request the daemon to shut down gracefully
+    async fn shutdown(&self);
+
     /// Subscribe to data updates (streaming)
     ///
     /// The daemon will send `DataUpdate` messages through the Tx channel

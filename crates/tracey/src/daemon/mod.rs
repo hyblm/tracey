@@ -156,7 +156,8 @@ pub async fn run(project_root: PathBuf, config_path: PathBuf) -> Result<()> {
 
     // Create service with watcher state for health monitoring
     // TraceyService is cheap to clone (holds Arc internally)
-    let service = TraceyService::new_with_watcher(Arc::clone(&engine), Arc::clone(&watcher_state));
+    let (service, mut shutdown_rx) =
+        TraceyService::new_with_watcher(Arc::clone(&engine), Arc::clone(&watcher_state));
     let (watcher_tx, mut watcher_rx) = tokio::sync::mpsc::channel::<WatcherEvent>(16);
 
     // Spawn file watcher in a separate OS thread with auto-restart
@@ -361,8 +362,18 @@ pub async fn run(project_root: PathBuf, config_path: PathBuf) -> Result<()> {
 
     // Accept connections and handle roam RPC
     loop {
-        // Check idle timeout every 30 seconds
-        let accept_result = tokio::time::timeout(Duration::from_secs(30), listener.accept()).await;
+        // Check for shutdown signal or accept with timeout
+        let accept_result = tokio::select! {
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    info!("Shutdown signal received");
+                    let _ = roam_local::remove_endpoint(&endpoint);
+                    return Ok(());
+                }
+                continue;
+            }
+            result = tokio::time::timeout(Duration::from_secs(30), listener.accept()) => result,
+        };
 
         match accept_result {
             Ok(Ok(stream)) => {
