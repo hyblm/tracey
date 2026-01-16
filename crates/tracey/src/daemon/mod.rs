@@ -25,6 +25,8 @@ pub mod service;
 pub mod watcher;
 
 use eyre::{Result, WrapErr};
+use notify::EventKind;
+use notify::event::AccessKind;
 use roam_local::LocalListener;
 use roam_stream::{ConnectionError, HandshakeConfig, accept};
 use std::path::{Path, PathBuf};
@@ -517,6 +519,12 @@ async fn run_smart_watcher(
             // Events are already batched; extract all paths from them
             let paths: Vec<PathBuf> = events
                 .iter()
+                .filter(|&e| {
+                    !matches!(
+                        e.kind,
+                        EventKind::Access(AccessKind::Open(notify::event::AccessMode::Any))
+                    )
+                })
                 .flat_map(|e| e.paths.iter().cloned())
                 .collect();
 
