@@ -520,9 +520,9 @@ async fn run_smart_watcher(
             let paths: Vec<PathBuf> = events
                 .iter()
                 .filter(|&e| {
-                    !matches!(
+                    matches!(
                         e.kind,
-                        EventKind::Access(AccessKind::Open(notify::event::AccessMode::Any))
+                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
                     )
                 })
                 .flat_map(|e| e.paths.iter().cloned())
