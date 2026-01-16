@@ -26,7 +26,6 @@ pub mod watcher;
 
 use eyre::{Result, WrapErr};
 use notify::EventKind;
-use notify::event::AccessKind;
 use roam_local::LocalListener;
 use roam_stream::{ConnectionError, HandshakeConfig, accept};
 use std::path::{Path, PathBuf};
