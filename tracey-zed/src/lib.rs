@@ -73,16 +73,21 @@ impl TraceyExtension {
     ///
     /// Ensure the tracey binary is installed, downloading if necessary.
     /// Supports multiple installation methods:
+    /// - Binary in PATH (for local development)
     /// - Pre-installed binary in extension directory
     /// - Automatic download from GitHub releases
-    fn ensure_binary_installed(&mut self, language_server_id: &LanguageServerId) -> Result<String> {
+    fn ensure_binary_installed(
+        &mut self,
+        language_server_id: &LanguageServerId,
+        worktree: &zed::Worktree,
+    ) -> Result<String> {
         // Return cached path if we have it
         if let Some(path) = &self.cached_binary_path {
             return Ok(path.clone());
         }
 
         // Check if binary exists in PATH first (for local development)
-        if let Some(path) = zed::which(binary_name()) {
+        if let Some(path) = worktree.which(binary_name()) {
             self.cached_binary_path = Some(path.clone());
             return Ok(path);
         }
@@ -158,9 +163,9 @@ impl zed::Extension for TraceyExtension {
     fn language_server_command(
         &mut self,
         language_server_id: &LanguageServerId,
-        _worktree: &zed::Worktree,
+        worktree: &zed::Worktree,
     ) -> Result<zed::Command> {
-        let binary_path = self.ensure_binary_installed(language_server_id)?;
+        let binary_path = self.ensure_binary_installed(language_server_id, worktree)?;
 
         Ok(zed::Command {
             command: binary_path,
