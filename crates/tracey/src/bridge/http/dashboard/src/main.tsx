@@ -801,6 +801,19 @@ function App() {
               useEffect(() => {
                 if (defaultSpec && defaultImpl) route(`/${defaultSpec}/${defaultImpl}/spec`, true);
               }, []);
+              // If no specs configured, show empty state instead of infinite "Redirecting..."
+              if (!defaultSpec || !defaultImpl) {
+                return html`
+                  <div class="empty-state">
+                    <h2>No Specifications Configured</h2>
+                    <p style="color: var(--text-secondary); margin: 1rem 0;">
+                      ${configError
+                        ? "There's a configuration error. Check the banner above for details."
+                        : "Add a spec to your config.styx file to get started."}
+                    </p>
+                  </div>
+                `;
+              }
               return html`<div class="loading">Redirecting...</div>`;
             }}
           />

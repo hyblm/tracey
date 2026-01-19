@@ -170,9 +170,6 @@ fn main() -> Result<()> {
             // r[impl config.path.default]
             let config_path = project_root.join(&config);
 
-            // Check for deprecated configs
-            check_deprecated_configs(&project_root)?;
-
             // r[impl daemon.logs.file]
             let log_path = project_root.join(".tracey/daemon.log");
             init_tracing(TracingConfig {
@@ -511,68 +508,6 @@ async fn kill_daemon(root: Option<PathBuf>) -> Result<()> {
             let _ = roam_local::remove_endpoint(&endpoint);
             println!("{}: Cleaned up", "Success".green());
         }
-    }
-
-    Ok(())
-}
-
-/// Check for deprecated config files and error if found
-fn check_deprecated_configs(project_root: &std::path::Path) -> Result<()> {
-    let kdl_config = project_root.join(".config/tracey/config.kdl");
-    let yaml_config = project_root.join(".config/tracey/config.yaml");
-
-    if kdl_config.exists() {
-        eyre::bail!(
-            "Found deprecated config file: {}\n\n\
-             Tracey now uses Styx configuration. Please:\n\
-             1. Rename {} to {}\n\
-             2. Convert the contents from KDL to Styx format\n\n\
-             Example Styx config:\n\
-             \n\
-             specs (\n\
-               {{\n\
-                 name my-spec\n\
-                 prefix r\n\
-                 include (docs/**/*.md)\n\
-                 impls (\n\
-                   {{\n\
-                     name rust\n\
-                     include (src/**/*.rs)\n\
-                   }}\n\
-                 )\n\
-               }}\n\
-             )\n",
-            kdl_config.display(),
-            "config.kdl".red(),
-            "config.styx".green(),
-        );
-    }
-
-    if yaml_config.exists() {
-        eyre::bail!(
-            "Found deprecated config file: {}\n\n\
-             Tracey now uses Styx configuration. Please:\n\
-             1. Rename {} to {}\n\
-             2. Convert the contents from YAML to Styx format\n\n\
-             Example Styx config:\n\
-             \n\
-             specs (\n\
-               {{\n\
-                 name my-spec\n\
-                 prefix r\n\
-                 include (docs/**/*.md)\n\
-                 impls (\n\
-                   {{\n\
-                     name rust\n\
-                     include (src/**/*.rs)\n\
-                   }}\n\
-                 )\n\
-               }}\n\
-             )\n",
-            yaml_config.display(),
-            "config.yaml".red(),
-            "config.styx".green(),
-        );
     }
 
     Ok(())

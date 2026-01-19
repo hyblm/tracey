@@ -47,23 +47,36 @@ pub struct Engine {
 impl Engine {
     /// Create a new engine for the given project root.
     pub async fn new(project_root: PathBuf, config_path: PathBuf) -> Result<Self> {
+        // Check for deprecated config files first
+        let deprecated_error = Self::check_deprecated_configs(&project_root);
+
         // Load initial config - record errors but continue with empty config
-        let (config, config_error) = match tokio::fs::read_to_string(&config_path).await {
-            Ok(content) => match facet_styx::from_str(&content) {
-                Ok(config) => (config, None),
-                Err(e) => {
-                    eyre::bail!("Config file {} has errors:\n{}", config_path.display(), e);
+        let (config, config_error) = if let Some(err) = deprecated_error {
+            // Deprecated config found - use empty config and record error
+            (Config::default(), Some(err))
+        } else {
+            match tokio::fs::read_to_string(&config_path).await {
+                Ok(content) => match facet_styx::from_str(&content) {
+                    Ok(config) => (config, None),
+                    Err(e) => {
+                        // Config has errors - use empty config and record error
+                        let err =
+                            format!("Config file {} has errors:\n{}", config_path.display(), e);
+                        (Config::default(), Some(err))
+                    }
+                },
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    info!(
+                        "Config file {} not found, starting with empty config",
+                        config_path.display()
+                    );
+                    (Config::default(), None)
                 }
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                info!(
-                    "Config file {} not found, starting with empty config",
-                    config_path.display()
-                );
-                (Config::default(), None)
-            }
-            Err(e) => {
-                eyre::bail!("Config file {} not readable: {}", config_path.display(), e);
+                Err(e) => {
+                    // Can't read config - use empty config and record error
+                    let err = format!("Config file {} not readable: {}", config_path.display(), e);
+                    (Config::default(), Some(err))
+                }
             }
         };
 
@@ -267,5 +280,52 @@ impl Engine {
     /// Get the current config error, if any.
     pub async fn config_error(&self) -> Option<String> {
         self.config_error.read().await.clone()
+    }
+
+    /// Check for deprecated config files (YAML, KDL) and return an error message if found.
+    fn check_deprecated_configs(project_root: &Path) -> Option<String> {
+        let kdl_config = project_root.join(".config/tracey/config.kdl");
+        let yaml_config = project_root.join(".config/tracey/config.yaml");
+
+        let deprecated = if kdl_config.exists() {
+            Some(("KDL", kdl_config))
+        } else if yaml_config.exists() {
+            Some(("YAML", yaml_config))
+        } else {
+            None
+        };
+
+        deprecated.map(|(format, path)| {
+            let old_name = path.file_name().unwrap().to_string_lossy();
+            format!(
+                "Found deprecated config file: {path}\n\n\
+                 Tracey now uses Styx configuration format.\n\n\
+                 To migrate:\n\
+                   1. Rename {old_name} to config.styx\n\
+                   2. Convert the contents from {format} to Styx format\n\n\
+                 Example Styx config:\n\n\
+                 ========================================\n\
+                 {example}\
+                 ========================================",
+                path = path.display(),
+                example = indoc::indoc! {r#"
+                    @schema {id crate:tracey-config@1, cli tracey}
+
+                    specs (
+                      {
+                        name my-spec
+                        prefix r
+                        include (docs/**/*.md)
+                        impls (
+                          {
+                            name rust
+                            include (src/**/*.rs)
+                          }
+                        )
+                      }
+                    )
+                "#},
+            )
+        })
     }
 }
